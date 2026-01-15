@@ -7,6 +7,9 @@ import sys
 from pathlib import Path
 import requests
 
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent))
+
 from config.config import config
 from core.orchestrator import RedAgentOrchestrator
 from memory.rag import RAGManager

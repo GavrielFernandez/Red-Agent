@@ -196,7 +196,7 @@ class CurlTool(BaseTool):
         
         url = params.get("url")
         method = params.get("method", "GET")
-        headers = params.get("headers", {})
+        headers = params.get("headers", {}) or {}
         data = params.get("data")
         follow_redirects = params.get("follow_redirects", False)
         username = params.get("username")
@@ -210,13 +210,16 @@ class CurlTool(BaseTool):
                 "status": "error"
             }
         
-        command = ["curl"]
+        command = ["curl", "-s"]  # Add -s for silent mode
         
         if method and method != "GET":
             command.extend(["-X", method])
         
-        for key, value in headers.items():
-            command.extend(["-H", f"{key}: {value}"])
+        # Handle headers safely
+        if isinstance(headers, dict):
+            for key, value in headers.items():
+                if value:  # Only add non-empty headers
+                    command.extend(["-H", f"{key}: {value}"])
         
         if data:
             command.extend(["-d", data])
@@ -227,7 +230,6 @@ class CurlTool(BaseTool):
         if username and password:
             command.extend(["-u", f"{username}:{password}"])
         
-        command.append("-v")  # Verbose for headers
         command.append(url)
         
         logger.info(f"Running Curl: {' '.join(command[:5])}...")
