@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RedAgent - Web Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1>🔴 RedAgent</h1>
+                <p class="subtitle">Autonomous Penetration Testing Dashboard</p>
+            </div>
+            <div class="header-status">
+                <span id="system-status" class="status-badge status-ok">System Ready</span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Navigation Tabs -->
+            <div class="tabs">
+                <button class="tab-button active" data-tab="dashboard">Dashboard</button>
+                <button class="tab-button" data-tab="assessment">New Assessment</button>
+                <button class="tab-button" data-tab="history">Job History</button>
+                <button class="tab-button" data-tab="reports">Reports</button>
+            </div>
+
+            <!-- Dashboard Tab -->
+            <section id="dashboard" class="tab-content active">
+                <h2>Assessment Overview</h2>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon">📊</div>
+                        <div class="stat-info">
+                            <p class="stat-label">Total Jobs</p>
+                            <p class="stat-value" id="total-jobs">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">⚙️</div>
+                        <div class="stat-info">
+                            <p class="stat-label">Running</p>
+                            <p class="stat-value" id="running-jobs">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">✅</div>
+                        <div class="stat-info">
+                            <p class="stat-label">Completed</p>
+                            <p class="stat-value" id="completed-jobs">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">❌</div>
+                        <div class="stat-info">
+                            <p class="stat-label">Failed</p>
+                            <p class="stat-value" id="failed-jobs">0</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Current Jobs -->
+                <h3>Active Jobs</h3>
+                <div id="active-jobs-container" class="jobs-container">
+                    <p class="empty-state">No active jobs. Start a new assessment to begin.</p>
+                </div>
+            </section>
+
+            <!-- Assessment Tab -->
+            <section id="assessment" class="tab-content">
+                <h2>Start New Assessment</h2>
+                
+                <div class="form-container">
+                    <form id="assessment-form">
+                        <div class="form-group">
+                            <label for="target">Target URL or IP Address</label>
+                            <input 
+                                type="text" 
+                                id="target" 
+                                name="target" 
+                                placeholder="http://localhost:8080 or 192.168.1.1"
+                                required
+                            >
+                            <small>Examples: http://example.com, https://target.local, 192.168.1.100</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="target-type">Target Type</label>
+                            <select id="target-type" name="type" required>
+                                <option value="url">URL (Web Application)</option>
+                                <option value="ip">IP Address (Network)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-info">
+                            <h4>Assessment Phases (Automatic)</h4>
+                            <ul>
+                                <li><strong>Phase 1:</strong> Reconnaissance - Gather target information</li>
+                                <li><strong>Phase 2:</strong> Vulnerability Analysis - Identify weaknesses</li>
+                                <li><strong>Phase 3:</strong> Exploitation Planning - Create attack strategy</li>
+                                <li><strong>Phase 4:</strong> Attack Execution - Test 8 attack vectors</li>
+                                <li><strong>Phase 5:</strong> Impact Assessment - Risk analysis</li>
+                            </ul>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-large">
+                            Start Assessment
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Assessment Info -->
+                <div class="info-box">
+                    <h4>⚠️ Important Notice</h4>
+                    <p>
+                        Only conduct assessments on systems you own or have explicit written permission to test. 
+                        Unauthorized penetration testing is illegal.
+                    </p>
+                </div>
+            </section>
+
+            <!-- History Tab -->
+            <section id="history" class="tab-content">
+                <h2>Job History</h2>
+                
+                <div id="history-container" class="jobs-container">
+                    <p class="empty-state">No jobs yet. Create an assessment to see history.</p>
+                </div>
+            </section>
+
+            <!-- Reports Tab -->
+            <section id="reports" class="tab-content">
+                <h2>Generated Reports</h2>
+                
+                <div id="reports-container" class="reports-container">
+                    <p class="empty-state">No reports yet. Complete an assessment to generate reports.</p>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>&copy; 2026 RedAgent - Autonomous Penetration Testing Framework</p>
+            <p><a href="/api/status">API Status</a> | <a href="https://github.com" target="_blank">GitHub</a></p>
+        </footer>
+    </div>
+
+    <!-- Notification -->
+    <div id="notification" class="notification"></div>
+
+    <!-- Script -->
+    <script src="/static/script.js"></script>
+</body>
+</html>
