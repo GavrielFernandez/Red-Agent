@@ -18,6 +18,8 @@ from .base_agent import BaseAgent, AgentMessage, AgentStatus
 from .command_control import CommandControl
 from .recon_agent import ReconAgent
 from .exploit_agent import ExploitAgent
+from .strategy_agent import StrategyAgent
+from .swarm_runtime import SwarmRuntime
 
 __all__ = [
     'BaseAgent',
@@ -25,5 +27,7 @@ __all__ = [
     'AgentStatus',
     'CommandControl',
     'ReconAgent',
-    'ExploitAgent'
+    'ExploitAgent',
+    'StrategyAgent',
+    'SwarmRuntime'
 ]

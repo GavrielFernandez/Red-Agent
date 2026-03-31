@@ -51,6 +51,7 @@ class Mission:
     agent_assignments: Dict[str, str] = field(default_factory=dict)  # task_id -> agent_id
     progress: float = 0.0
     status: str = "active"
+    replans: int = 0
 
 
 class CommandControl(BaseAgent):
@@ -225,6 +226,22 @@ class CommandControl(BaseAgent):
     
     async def _plan_attack(self, mission: Mission):
         """Plan the attack strategy using LLM"""
+        strategy_agents = self.agent_pool.find_by_capability("strategy_planning")
+
+        if strategy_agents:
+            strategy_agent = strategy_agents[0]
+            result = await strategy_agent.run_with_retry({
+                "id": f"{mission.id}_strategy",
+                "type": "build_strategy",
+                "target": mission.target,
+                "objectives": mission.objectives,
+                "recon": mission.intel.get("reconnaissance", {}),
+                "vulnerabilities": mission.intel.get("vulnerabilities", [])
+            })
+            if result.success:
+                mission.intel["strategy"] = result.data
+                return
+
         if not self.llm_client:
             # Default strategy without LLM
             mission.intel["strategy"] = {
@@ -334,6 +351,34 @@ class CommandControl(BaseAgent):
                     break  # Move to next vuln if exploited
         
         mission.intel["exploitation"] = exploitation_results
+
+        if sorted_vulns:
+            failed_attempts = max(0, len(sorted_vulns[:10]) - len(exploitation_results))
+            if failed_attempts > 0:
+                await self._request_replan(mission, failed_attempts, sorted_vulns[:10])
+
+    async def _request_replan(self, mission: Mission, failed_attempts: int, attempted: List[Dict[str, Any]]):
+        """Ask strategy agent to revise the mission approach when execution underperforms."""
+        strategy_agents = self.agent_pool.find_by_capability("strategy_planning")
+        if not strategy_agents:
+            return
+
+        strategy_agent = strategy_agents[0]
+        previous_strategy = mission.intel.get("strategy", {})
+
+        result = await strategy_agent.run_with_retry({
+            "id": f"{mission.id}_strategy_replan_{mission.replans + 1}",
+            "type": "replan_strategy",
+            "target": mission.target,
+            "objectives": mission.objectives,
+            "vulnerabilities": attempted,
+            "failures": [{"reason": "unsuccessful_exploitation"}] * failed_attempts,
+            "previous_strategy": previous_strategy
+        })
+
+        if result.success:
+            mission.replans += 1
+            mission.intel["strategy_replan"] = result.data
     
     async def _execute_post_exploitation(self, mission: Mission):
         """Post-exploitation phase"""
