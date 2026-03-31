@@ -101,6 +101,29 @@
             font-size: 0.8rem;
             cursor: pointer;
         }
+
+        .filter-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .filter-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.82rem;
+            color: #bbb;
+        }
+
+        .timeline-item {
+            cursor: pointer;
+        }
+
+        .timeline-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
         
         .status-badge {
             display: flex;
@@ -481,6 +504,18 @@
             </div>
             
             <div class="sidebar-section">
+                <h3>View Filters</h3>
+                <div class="filter-grid">
+                    <label class="filter-item"><input type="checkbox" data-filter-type="target" checked>Target</label>
+                    <label class="filter-item"><input type="checkbox" data-filter-type="host" checked>Host</label>
+                    <label class="filter-item"><input type="checkbox" data-filter-type="service" checked>Service</label>
+                    <label class="filter-item"><input type="checkbox" data-filter-type="vulnerability" checked>Vulnerability</label>
+                    <label class="filter-item"><input type="checkbox" data-filter-type="exploit" checked>Exploit</label>
+                    <label class="filter-item"><input type="checkbox" data-filter-type="data" checked>Data</label>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
                 <h3>Live Activity</h3>
                 <div class="timeline" id="activity-timeline">
                     <div class="timeline-item">
@@ -508,6 +543,26 @@
         const viz = new AttackVisualization('attack-graph');
         const dashboard = new MetricsDashboard('metrics-container');
         let selectedJobId = new URLSearchParams(window.location.search).get('job') || '';
+        const enabledTypes = new Set(['target', 'host', 'service', 'vulnerability', 'exploit', 'data']);
+
+        function applyNodeTypeFilters(graph) {
+            const nodes = (graph.nodes || []).filter(n => enabledTypes.has(n.type));
+            const nodeIds = new Set(nodes.map(n => n.id));
+            const edges = (graph.edges || []).filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
+            return { nodes, edges };
+        }
+
+        document.querySelectorAll('input[data-filter-type]').forEach(checkbox => {
+            checkbox.addEventListener('change', () => {
+                const nodeType = checkbox.getAttribute('data-filter-type');
+                if (checkbox.checked) {
+                    enabledTypes.add(nodeType);
+                } else {
+                    enabledTypes.delete(nodeType);
+                }
+                refreshVisualizationState();
+            });
+        });
 
         const filterInput = document.getElementById('job-id-filter');
         const filterButton = document.getElementById('apply-job-filter');
@@ -547,14 +602,24 @@
             timeline.innerHTML = items.map(item => {
                 const t = new Date(item.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 const sev = (item.severity || 'info').toLowerCase();
+                const nodeId = item.node_id || '';
                 return `
-                    <div class="timeline-item">
+                    <div class="timeline-item" data-node-id="${nodeId}">
                         <div class="timeline-severity ${sev}"></div>
                         <span class="timeline-time">${t}</span>
                         <span class="timeline-event">${item.type}</span>
                     </div>
                 `;
             }).join('');
+
+            timeline.querySelectorAll('.timeline-item').forEach(el => {
+                el.addEventListener('click', () => {
+                    const nodeId = el.getAttribute('data-node-id');
+                    if (nodeId) {
+                        viz.focusOnNode(nodeId);
+                    }
+                });
+            });
         }
 
         function updateHeaderStatus(metrics) {
@@ -599,7 +664,9 @@
                     return;
                 }
                 const data = await response.json();
-                viz.updateFromState(data.graph || { nodes: [], edges: [] });
+                const filteredGraph = applyNodeTypeFilters(data.graph || { nodes: [], edges: [] });
+                viz.clear();
+                viz.updateFromState(filteredGraph);
                 dashboard.update(data.metrics || {});
                 updateTimeline(data.metrics || {});
                 updateHeaderStatus(data.metrics || {});

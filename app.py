@@ -97,6 +97,27 @@ HEADER_NAMES = [
     "Content-Security-Policy"
 ]
 
+ATTACK_TAXONOMY = {
+    "missing_security_headers": ("Misconfiguration", "Security Header Hardening"),
+    "sql_injection": ("Injection", "SQL Injection"),
+    "xss": ("Injection", "Cross-Site Scripting"),
+    "command_injection": ("Injection", "Command Injection"),
+    "path_traversal": ("File Access", "Path Traversal"),
+    "xxe": ("Injection", "XML External Entity"),
+    "ldap_injection": ("Injection", "LDAP Injection"),
+    "header_injection": ("Injection", "HTTP Header Injection"),
+    "brute_force": ("Authentication", "Credential Brute Force"),
+    "http_basic_auth_brute_force": ("Authentication", "Credential Brute Force")
+}
+
+SEVERITY_CONFIDENCE_BASE = {
+    "critical": 92,
+    "high": 82,
+    "medium": 72,
+    "low": 62,
+    "info": 50
+}
+
 
 def _extract_missing_headers(text: str):
     """Extract known missing security headers from text evidence."""
@@ -106,6 +127,56 @@ def _extract_missing_headers(text: str):
         if header.lower() in lowered:
             found.append(header)
     return sorted(set(found))
+
+
+def _classify_attack(ftype: str, description: str = ""):
+    """Return normalized attack family and variant labels."""
+    token = (ftype or "").strip().lower()
+    desc = (description or "").lower()
+
+    if token in ATTACK_TAXONOMY:
+        return ATTACK_TAXONOMY[token]
+
+    # Lightweight fallback heuristics
+    if "sql" in token or "sql" in desc:
+        return ATTACK_TAXONOMY["sql_injection"]
+    if "xss" in token or "cross-site" in desc:
+        return ATTACK_TAXONOMY["xss"]
+    if "command" in token or "command" in desc:
+        return ATTACK_TAXONOMY["command_injection"]
+    if "header" in token or "header" in desc:
+        return ATTACK_TAXONOMY["header_injection"]
+    if "traversal" in token or "path" in desc:
+        return ATTACK_TAXONOMY["path_traversal"]
+    if "brute" in token or "credential" in desc or "auth" in token:
+        return ATTACK_TAXONOMY["brute_force"]
+
+    return ("General", "Uncategorized")
+
+
+def _score_finding(finding: dict):
+    """Attach confidence and evidence strength to findings."""
+    severity = str(finding.get("severity", "medium")).lower()
+    base = SEVERITY_CONFIDENCE_BASE.get(severity, 65)
+
+    evidence = str(finding.get("evidence", ""))
+    status = str(finding.get("status", ""))
+
+    evidence_strength = "moderate"
+    confidence = base
+
+    if evidence:
+        confidence += 6
+    if "confirmed" in status.lower() or "vulnerable" in status.lower() or "success" in status.lower():
+        confidence += 8
+        evidence_strength = "strong"
+    if "not present" in evidence.lower() or "headers" in evidence.lower():
+        evidence_strength = "strong"
+
+    confidence = max(35, min(99, confidence))
+    finding["confidence_score"] = confidence
+    finding["evidence_strength"] = evidence_strength
+    return finding
 
 
 def _normalize_findings(findings, target: str = ""):
@@ -143,9 +214,12 @@ def _normalize_findings(findings, target: str = ""):
             key = ("missing_security_headers", location, tuple(headers))
             entry = dedup.get(key)
             if not entry:
+                family, variant = _classify_attack("missing_security_headers", description)
                 dedup[key] = {
                     "type": "missing_security_headers",
                     "attack": "missing_security_headers",
+                    "attack_family": family,
+                    "attack_variant": variant,
                     "severity": "MEDIUM",
                     "status": "Confirmed Misconfiguration",
                     "location": location,
@@ -160,9 +234,17 @@ def _normalize_findings(findings, target: str = ""):
             description[:180]
         )
         if key not in dedup:
-            dedup[key] = finding
+            copied = dict(finding)
+            family, variant = _classify_attack(ftype, description)
+            copied["attack_family"] = copied.get("attack_family") or family
+            copied["attack_variant"] = copied.get("attack_variant") or variant
+            dedup[key] = copied
 
-    return list(dedup.values())
+    normalized = []
+    for item in dedup.values():
+        normalized.append(_score_finding(item))
+
+    return normalized
 
 
 def _emit_visualization_event(event_type, data, source="app", severity="info"):
@@ -174,12 +256,12 @@ def _emit_visualization_event(event_type, data, source="app", severity="info"):
         hub = get_visualization_hub()
         event = hub.create_event(event_type=event_type, data=data, source=source, severity=severity)
         # Update local graph/metrics synchronously for reliable API-driven visualization.
+        hub._update_graph_from_event(event)
         hub.metrics.record_event(event)
         if event_type == EventType.SCAN_PROGRESS:
             progress = data.get("progress") if isinstance(data, dict) else None
             if progress is not None:
                 hub.metrics.update_progress(float(progress))
-        hub._update_graph_from_event(event)
     except Exception as e:
         logger.debug(f"Visualization event emission skipped: {e}")
 

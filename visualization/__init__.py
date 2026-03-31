@@ -252,7 +252,8 @@ class MetricsCollector:
             "type": event.event_type.value,
             "severity": event.severity,
             "job_id": event_job_id,
-            "progress": event_progress
+            "progress": event_progress,
+            "node_id": event.data.get("node_id") if isinstance(event.data, dict) else None
         })
         
         # Keep timeline manageable
@@ -461,14 +462,14 @@ class VisualizationHub:
             target_label = data.get("target", host)
             target_node = ensure_job_target_node(job_id, target_label)
 
-            self.attack_graph.add_node(
+            host_node = self.attack_graph.add_node(
                 "host", 
                 host,
                 data,
                 "info"
             )
+            data["node_id"] = host_node.id
 
-            host_node = find_node(node_type="host", job_id=job_id, label_contains=host)
             if target_node and host_node:
                 self.attack_graph.add_edge(target_node.id, host_node.id, "discovered", "host_discovered")
         
@@ -495,6 +496,7 @@ class VisualizationHub:
                 data,
                 severity
             )
+            data["node_id"] = node.id
 
             job_id = data.get("job_id")
             host_node = find_node(node_type="host", job_id=job_id)
@@ -511,6 +513,7 @@ class VisualizationHub:
                 data,
                 "high"
             )
+            data["node_id"] = attack_node.id
             self.attack_graph.update_node_status(attack_node.id, "attacking", "high")
 
             source_node = find_node(node_type="vulnerability", job_id=job_id, label_contains=vector)
@@ -525,6 +528,7 @@ class VisualizationHub:
             attack_node = find_node(node_type="exploit", job_id=job_id, label_contains=vector)
             if attack_node:
                 self.attack_graph.update_node_status(attack_node.id, "exploited", "critical")
+                data["node_id"] = attack_node.id
             else:
                 node = self.attack_graph.add_node(
                     "exploit",
@@ -533,6 +537,7 @@ class VisualizationHub:
                     "critical"
                 )
                 self.attack_graph.update_node_status(node.id, "exploited", "critical")
+                data["node_id"] = node.id
 
         elif event.event_type == EventType.ATTACK_FAILED:
             job_id = data.get("job_id")
@@ -540,6 +545,7 @@ class VisualizationHub:
             attack_node = find_node(node_type="exploit", job_id=job_id, label_contains=vector)
             if attack_node:
                 self.attack_graph.update_node_status(attack_node.id, "failed", "medium")
+                data["node_id"] = attack_node.id
     
     async def _broadcast_loop(self):
         """Main broadcast loop"""
