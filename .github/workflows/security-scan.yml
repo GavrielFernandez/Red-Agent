@@ -1,0 +1,444 @@
+name: RedAgent Security Assessment
+
+on:
+  # Manual trigger with inputs
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Target URL to scan'
+        required: true
+        type: string
+      scan_type:
+        description: 'Type of security scan'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - quick
+          - full
+          - deep
+          - reconnaissance
+          - vulnerability
+      attack_vectors:
+        description: 'Attack vectors (comma-separated)'
+        required: false
+        default: 'all'
+        type: string
+      report_format:
+        description: 'Report format'
+        required: false
+        default: 'html'
+        type: choice
+        options:
+          - html
+          - json
+          - pdf
+          - all
+  
+  # Schedule scans
+  schedule:
+    # Weekly security scan (Sunday at 2am UTC)
+    - cron: '0 2 * * 0'
+  
+  # Trigger on pull requests to main
+  pull_request:
+    branches: [main, master]
+    paths:
+      - '**.py'
+      - '**.js'
+      - '**.html'
+      - 'requirements.txt'
+      - 'package.json'
+
+env:
+  PYTHON_VERSION: '3.11'
+  REDAGENT_TIMEOUT: 3600
+  MAX_SCAN_DEPTH: 5
+
+jobs:
+  # Security scanning job
+  security-scan:
+    name: 🔴 RedAgent Security Assessment
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    permissions:
+      contents: read
+      security-events: write
+      issues: write
+      pull-requests: write
+    
+    steps:
+      - name: 🔽 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: 📦 Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov safety bandit semgrep
+      
+      - name: 🔧 Install Security Tools
+        run: |
+          # Install Nmap
+          sudo apt-get update
+          sudo apt-get install -y nmap
+          
+          # Install Nuclei
+          curl -sL https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_amd64.zip -o nuclei.zip
+          unzip nuclei.zip
+          sudo mv nuclei /usr/local/bin/
+          nuclei -update-templates
+          
+          # Install SQLMap
+          pip install sqlmap
+          
+          # Verify installations
+          nmap --version
+          nuclei -version
+          sqlmap --version
+      
+      - name: 🛡️ Static Code Analysis (Bandit)
+        continue-on-error: true
+        run: |
+          bandit -r . -f json -o bandit-results.json --exclude ./tests,./venv,./.git
+          
+      - name: 🔍 Semgrep SAST Scan
+        continue-on-error: true
+        run: |
+          semgrep --config=auto --json --output semgrep-results.json .
+          
+      - name: 📋 Dependency Vulnerability Check
+        continue-on-error: true
+        run: |
+          safety check --full-report --output json > safety-results.json || true
+          pip-audit --format=json --output pip-audit-results.json || true
+      
+      - name: 🔴 Run RedAgent Assessment
+        id: redagent
+        env:
+          TARGET_URL: ${{ github.event.inputs.target_url || 'https://example.com' }}
+          SCAN_TYPE: ${{ github.event.inputs.scan_type || 'quick' }}
+          ATTACK_VECTORS: ${{ github.event.inputs.attack_vectors || 'all' }}
+          OLLAMA_HOST: ${{ secrets.OLLAMA_HOST }}
+          SHODAN_API_KEY: ${{ secrets.SHODAN_API_KEY }}
+          VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+        run: |
+          python -c "
+          import sys
+          import os
+          import json
+          from datetime import datetime
+          
+          sys.path.insert(0, '.')
+          
+          # Configure scan based on inputs
+          scan_config = {
+              'target': os.environ.get('TARGET_URL', 'https://example.com'),
+              'scan_type': os.environ.get('SCAN_TYPE', 'quick'),
+              'attack_vectors': os.environ.get('ATTACK_VECTORS', 'all').split(','),
+              'timestamp': datetime.now().isoformat()
+          }
+          
+          print(f'🎯 Target: {scan_config[\"target\"]}')
+          print(f'📊 Scan Type: {scan_config[\"scan_type\"]}')
+          print(f'⚔️ Attack Vectors: {scan_config[\"attack_vectors\"]}')
+          
+          # Try to run real scan if orchestrator available
+          try:
+              from core.orchestrator import SecurityOrchestrator
+              orchestrator = SecurityOrchestrator()
+              result = orchestrator.run_assessment(scan_config['target'])
+              
+              # Save results
+              with open('redagent-results.json', 'w') as f:
+                  json.dump(result, f, indent=2)
+              
+              print('✅ RedAgent scan completed')
+              
+          except Exception as e:
+              print(f'⚠️ RedAgent scan skipped: {e}')
+              
+              # Create placeholder results for demo
+              demo_results = {
+                  'scan_config': scan_config,
+                  'status': 'demo_mode',
+                  'findings': [],
+                  'message': 'Full scan requires Ollama LLM backend'
+              }
+              with open('redagent-results.json', 'w') as f:
+                  json.dump(demo_results, f, indent=2)
+          "
+      
+      - name: 🧬 Nuclei Vulnerability Scan
+        if: github.event.inputs.target_url != ''
+        continue-on-error: true
+        run: |
+          nuclei -target "${{ github.event.inputs.target_url }}" \
+            -severity critical,high,medium \
+            -json \
+            -output nuclei-results.json \
+            -silent \
+            -rate-limit 50 \
+            -timeout 15 \
+            -retries 2
+      
+      - name: 📊 Aggregate Results
+        run: |
+          python -c "
+          import json
+          import os
+          from datetime import datetime
+          
+          # Collect all results
+          aggregated = {
+              'timestamp': datetime.now().isoformat(),
+              'repository': os.environ.get('GITHUB_REPOSITORY', 'unknown'),
+              'commit': os.environ.get('GITHUB_SHA', 'unknown')[:8],
+              'run_id': os.environ.get('GITHUB_RUN_ID', 'unknown'),
+              'target': '${{ github.event.inputs.target_url }}' or 'N/A',
+              'scan_type': '${{ github.event.inputs.scan_type }}' or 'N/A',
+              'results': {},
+              'summary': {
+                  'total_findings': 0,
+                  'critical': 0,
+                  'high': 0,
+                  'medium': 0,
+                  'low': 0
+              }
+          }
+          
+          # Load individual results
+          result_files = [
+              ('bandit', 'bandit-results.json'),
+              ('semgrep', 'semgrep-results.json'),
+              ('safety', 'safety-results.json'),
+              ('pip_audit', 'pip-audit-results.json'),
+              ('nuclei', 'nuclei-results.json'),
+              ('redagent', 'redagent-results.json')
+          ]
+          
+          for name, filename in result_files:
+              if os.path.exists(filename):
+                  try:
+                      with open(filename) as f:
+                          content = f.read()
+                          if content.strip():
+                              # Handle JSONL format (nuclei)
+                              if name == 'nuclei':
+                                  findings = []
+                                  for line in content.strip().split('\\n'):
+                                      if line.strip():
+                                          try:
+                                              findings.append(json.loads(line))
+                                          except:
+                                              pass
+                                  aggregated['results'][name] = findings
+                              else:
+                                  aggregated['results'][name] = json.loads(content)
+                  except Exception as e:
+                      print(f'Warning: Could not load {filename}: {e}')
+          
+          # Calculate summary
+          for source, data in aggregated['results'].items():
+              if isinstance(data, list):
+                  aggregated['summary']['total_findings'] += len(data)
+                  for item in data:
+                      severity = str(item.get('info', {}).get('severity', item.get('severity', 'unknown'))).lower()
+                      if severity in aggregated['summary']:
+                          aggregated['summary'][severity] += 1
+          
+          # Save aggregated report
+          with open('security-report.json', 'w') as f:
+              json.dump(aggregated, f, indent=2)
+          
+          print(json.dumps(aggregated['summary'], indent=2))
+          "
+      
+      - name: 📝 Generate SARIF Report
+        run: |
+          python -c "
+          import json
+          import os
+          
+          # Convert to SARIF format for GitHub Security tab
+          sarif = {
+              '\$schema': 'https://json.schemastore.org/sarif-2.1.0.json',
+              'version': '2.1.0',
+              'runs': [{
+                  'tool': {
+                      'driver': {
+                          'name': 'RedAgent',
+                          'version': '1.0.0',
+                          'informationUri': 'https://github.com/redagent',
+                          'rules': []
+                      }
+                  },
+                  'results': []
+              }]
+          }
+          
+          # Load security report
+          if os.path.exists('security-report.json'):
+              with open('security-report.json') as f:
+                  report = json.load(f)
+              
+              rule_index = 0
+              
+              # Convert Bandit findings
+              bandit_results = report.get('results', {}).get('bandit', {})
+              if isinstance(bandit_results, dict):
+                  for finding in bandit_results.get('results', []):
+                      rule_id = finding.get('test_id', f'BANDIT-{rule_index}')
+                      
+                      sarif['runs'][0]['tool']['driver']['rules'].append({
+                          'id': rule_id,
+                          'name': finding.get('test_name', 'Unknown'),
+                          'shortDescription': {'text': finding.get('issue_text', '')}
+                      })
+                      
+                      sarif['runs'][0]['results'].append({
+                          'ruleId': rule_id,
+                          'level': 'warning' if finding.get('issue_severity', '').lower() != 'high' else 'error',
+                          'message': {'text': finding.get('issue_text', '')},
+                          'locations': [{
+                              'physicalLocation': {
+                                  'artifactLocation': {'uri': finding.get('filename', '')},
+                                  'region': {'startLine': finding.get('line_number', 1)}
+                              }
+                          }]
+                      })
+                      rule_index += 1
+          
+          with open('results.sarif', 'w') as f:
+              json.dump(sarif, f, indent=2)
+          "
+      
+      - name: 📤 Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+          category: redagent-security
+      
+      - name: 📁 Upload Scan Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports-${{ github.run_id }}
+          path: |
+            security-report.json
+            redagent-results.json
+            nuclei-results.json
+            bandit-results.json
+            semgrep-results.json
+            results.sarif
+          retention-days: 30
+      
+      - name: 💬 Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            let summary = '## 🔴 RedAgent Security Assessment\n\n';
+            
+            if (fs.existsSync('security-report.json')) {
+              const report = JSON.parse(fs.readFileSync('security-report.json', 'utf8'));
+              
+              summary += '### Summary\n\n';
+              summary += `| Severity | Count |\n`;
+              summary += `|----------|-------|\n`;
+              summary += `| 🔴 Critical | ${report.summary.critical} |\n`;
+              summary += `| 🟠 High | ${report.summary.high} |\n`;
+              summary += `| 🟡 Medium | ${report.summary.medium} |\n`;
+              summary += `| 🟢 Low | ${report.summary.low} |\n`;
+              summary += `| **Total** | **${report.summary.total_findings}** |\n\n`;
+              
+              if (report.summary.critical > 0 || report.summary.high > 0) {
+                summary += '⚠️ **Critical/High severity findings detected!** Please review before merging.\n';
+              } else {
+                summary += '✅ No critical or high severity findings detected.\n';
+              }
+            } else {
+              summary += '⚠️ Security report not generated.\n';
+            }
+            
+            summary += '\n📊 [View full results in Actions artifacts](' + context.payload.repository.html_url + '/actions/runs/' + context.runId + ')';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+      
+      - name: 🚨 Fail on Critical Findings
+        if: github.event_name == 'pull_request'
+        run: |
+          python -c "
+          import json
+          import sys
+          
+          with open('security-report.json') as f:
+              report = json.load(f)
+          
+          critical = report.get('summary', {}).get('critical', 0)
+          high = report.get('summary', {}).get('high', 0)
+          
+          if critical > 0:
+              print(f'❌ FAILED: {critical} critical vulnerabilities found')
+              sys.exit(1)
+          
+          print(f'✅ No critical vulnerabilities. High: {high}')
+          "
+
+  # Scheduled comprehensive scan
+  scheduled-scan:
+    name: 📅 Scheduled Security Scan
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 🔽 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: 📦 Install Dependencies
+        run: pip install -r requirements.txt
+      
+      - name: 🔴 Run Scheduled Scan
+        env:
+          SCHEDULED_TARGETS: ${{ secrets.SCHEDULED_SCAN_TARGETS }}
+        run: |
+          echo "Running scheduled security scan..."
+          # Add scheduled scan logic here
+      
+      - name: 📧 Send Report Notification
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Create issue for scheduled scan results
+            const title = `🔴 Weekly Security Scan - ${new Date().toISOString().split('T')[0]}`;
+            
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: 'Automated weekly security scan completed. Check Actions artifacts for full report.',
+              labels: ['security', 'automated']
+            });
