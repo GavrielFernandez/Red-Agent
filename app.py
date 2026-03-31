@@ -16,6 +16,9 @@ import glob
 import traceback
 import queue
 from io import BytesIO
+import asyncio
+import re
+from urllib.parse import urlparse
 
 # Load environment variables from .env file
 try:
@@ -36,13 +39,21 @@ except ImportError:
 try:
     from intelligence.osint_hub import get_osint_hub, OSINTHub
     from intelligence.mitre_attack import get_mitre_mapper, MitreAttackMapper
-    from agents import CommandControl, ReconAgent, ExploitAgent
     from visualization import get_visualization_hub, EventType
     ENTERPRISE_FEATURES = True
     print("[+] Enterprise features loaded")
 except ImportError as e:
     print(f"[WARN] Enterprise features not available: {e}")
     ENTERPRISE_FEATURES = False
+
+# Import Swarm Agent Runtime (independent from enterprise modules)
+try:
+    from agents import CommandControl, ReconAgent, ExploitAgent, StrategyAgent, SwarmRuntime
+    SWARM_AVAILABLE = True
+    print("[+] Swarm runtime loaded")
+except ImportError as e:
+    print(f"[WARN] Swarm runtime not available: {e}")
+    SWARM_AVAILABLE = False
 
 # Configure logging
 log_dir = Path("logs")
@@ -78,6 +89,99 @@ def add_cors_headers(response):
 assessment_jobs = {}
 job_counter = 0
 job_threads = {}  # Track thread handles for cancellation
+
+HEADER_NAMES = [
+    "X-Frame-Options",
+    "X-Content-Type-Options",
+    "Strict-Transport-Security",
+    "Content-Security-Policy"
+]
+
+
+def _extract_missing_headers(text: str):
+    """Extract known missing security headers from text evidence."""
+    found = []
+    lowered = (text or "").lower()
+    for header in HEADER_NAMES:
+        if header.lower() in lowered:
+            found.append(header)
+    return sorted(set(found))
+
+
+def _normalize_findings(findings, target: str = ""):
+    """Normalize and deduplicate findings while applying protocol-aware rules."""
+    if not findings:
+        return []
+
+    dedup = {}
+    target_is_http = str(target).startswith("http://")
+
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+
+        ftype = str(finding.get("type") or finding.get("attack") or finding.get("subtype") or "unknown")
+        description = str(finding.get("description") or finding.get("content") or "")
+        evidence = str(finding.get("evidence") or finding.get("result") or "")
+        location = str(finding.get("location") or target or "")
+
+        is_header_issue = (
+            "missing_security_headers" in ftype.lower()
+            or "missing security headers" in description.lower()
+            or "x-frame-options" in evidence.lower()
+            or "content-security-policy" in evidence.lower()
+        )
+
+        if is_header_issue:
+            headers = _extract_missing_headers(description + " " + evidence)
+            if target_is_http:
+                headers = [h for h in headers if h != "Strict-Transport-Security"]
+
+            if not headers:
+                continue
+
+            key = ("missing_security_headers", location, tuple(headers))
+            entry = dedup.get(key)
+            if not entry:
+                dedup[key] = {
+                    "type": "missing_security_headers",
+                    "attack": "missing_security_headers",
+                    "severity": "MEDIUM",
+                    "status": "Confirmed Misconfiguration",
+                    "location": location,
+                    "description": f"Missing security headers: {', '.join(headers)}",
+                    "evidence": f"Headers not present in response: {', '.join(headers)}"
+                }
+            continue
+
+        key = (
+            ftype.lower(),
+            location,
+            description[:180]
+        )
+        if key not in dedup:
+            dedup[key] = finding
+
+    return list(dedup.values())
+
+
+def _emit_visualization_event(event_type, data, source="app", severity="info"):
+    """Emit visualization events when the visualization hub is available."""
+    if not ENTERPRISE_FEATURES:
+        return
+
+    try:
+        hub = get_visualization_hub()
+        event = hub.create_event(event_type=event_type, data=data, source=source, severity=severity)
+        # Update local graph/metrics synchronously for reliable API-driven visualization.
+        hub.metrics.record_event(event)
+        if event_type == EventType.SCAN_PROGRESS:
+            progress = data.get("progress") if isinstance(data, dict) else None
+            if progress is not None:
+                hub.metrics.update_progress(float(progress))
+        hub._update_graph_from_event(event)
+    except Exception as e:
+        logger.debug(f"Visualization event emission skipped: {e}")
 
 # ============================================================================
 # ROUTES - Web Interface
@@ -165,6 +269,7 @@ def create_assessment():
         
         target = data.get('target', '').strip()
         target_type = data.get('type', 'url').strip()
+        execution_mode = data.get('mode', 'classic').strip().lower()
         
         # Validate inputs
         if not target:
@@ -172,6 +277,12 @@ def create_assessment():
         
         if target_type not in ['url', 'ip']:
             return jsonify({"error": "Target type must be 'url' or 'ip'"}), 400
+
+        if execution_mode not in ['classic', 'swarm']:
+            return jsonify({"error": "Mode must be 'classic' or 'swarm'"}), 400
+
+        if execution_mode == 'swarm' and not SWARM_AVAILABLE:
+            return jsonify({"error": "Swarm mode is unavailable on this server"}), 501
         
         # Validate target format
         if target_type == 'url' and not (target.startswith('http://') or target.startswith('https://')):
@@ -185,6 +296,7 @@ def create_assessment():
             "id": job_id,
             "target": target,
             "type": target_type,
+            "mode": execution_mode,
             "status": "starting",
             "created_at": datetime.now().isoformat(),
             "started_at": None,
@@ -195,7 +307,14 @@ def create_assessment():
             "vulnerabilities_found": 0,
             "report": None,
             "error": None,
-            "error_traceback": None
+            "error_traceback": None,
+            "swarm": {
+                "mission_id": None,
+                "phase": None,
+                "replans": 0,
+                "agent_count": 0,
+                "status": "not_started"
+            }
         }
         
         logger.info(f"[{job_id}] Assessment created for {target}")
@@ -203,7 +322,7 @@ def create_assessment():
         # Run assessment in background thread
         try:
             thread = threading.Thread(
-                target=run_assessment_background,
+                target=run_swarm_assessment_background if execution_mode == 'swarm' else run_assessment_background,
                 args=(job_id, target, target_type),
                 daemon=False
             )
@@ -223,6 +342,7 @@ def create_assessment():
         return jsonify({
             "job_id": job_id,
             "status": "created",
+            "mode": execution_mode,
             "message": f"Assessment started for {target}"
         }), 201
     
@@ -604,6 +724,17 @@ class JobProgressTracker:
                 if self.job_id in assessment_jobs:
                     assessment_jobs[self.job_id]['phase'] = name
                     assessment_jobs[self.job_id]['progress'] = progress
+                    target = assessment_jobs[self.job_id].get('target', '')
+                    _emit_visualization_event(
+                        EventType.SCAN_PROGRESS,
+                        {
+                            "job_id": self.job_id,
+                            "target": target,
+                            "phase": name,
+                            "progress": progress
+                        },
+                        source="classic_runner"
+                    )
                 logger.info(f"[{self.job_id}] Phase: {name} ({progress}%)")
                 return
     
@@ -621,6 +752,20 @@ def run_assessment_background(job_id, target, target_type):
         logger.info(f"[{job_id}] Starting assessment for {target} (type: {target_type})")
         job['status'] = 'running'
         job['started_at'] = datetime.now().isoformat()
+        _emit_visualization_event(
+            EventType.SCAN_START,
+            {"job_id": job_id, "target": target, "mode": "classic"},
+            source="classic_runner"
+        )
+        host_label = target
+        if target_type == "url":
+            parsed = urlparse(target)
+            host_label = parsed.netloc or target
+        _emit_visualization_event(
+            EventType.HOST_DISCOVERED,
+            {"job_id": job_id, "host": host_label},
+            source="classic_runner"
+        )
         
         # Check if RedAgent is available
         if RedAgent is None:
@@ -677,6 +822,7 @@ def run_assessment_background(job_id, target, target_type):
             # Still mark as completed even if report loading fails
         
         # Mark job as completed
+        vulnerabilities = _normalize_findings(vulnerabilities, target=target)
         job['status'] = 'completed'
         job['progress'] = 100
         job['phase'] = 'Completed'
@@ -684,6 +830,44 @@ def run_assessment_background(job_id, target, target_type):
         job['findings'] = vulnerabilities
         job['completed_at'] = datetime.now().isoformat()
         job['vulnerabilities_found'] = len(vulnerabilities)
+
+        for finding in vulnerabilities:
+            _emit_visualization_event(
+                EventType.ATTACK_START,
+                {
+                    "job_id": job_id,
+                    "target": target,
+                    "vector": finding.get("attack") or finding.get("type", "unknown")
+                },
+                source="classic_runner"
+            )
+            _emit_visualization_event(
+                EventType.VULN_DETECTED,
+                {
+                    "job_id": job_id,
+                    "type": finding.get("type") or finding.get("attack", "unknown"),
+                    "severity": str(finding.get("severity", "medium")).lower(),
+                    "location": finding.get("location", target)
+                },
+                source="classic_runner",
+                severity=str(finding.get("severity", "medium")).lower()
+            )
+            _emit_visualization_event(
+                EventType.ATTACK_SUCCESS,
+                {
+                    "job_id": job_id,
+                    "target": target,
+                    "vector": finding.get("attack") or finding.get("type", "unknown"),
+                    "vuln_type": finding.get("type") or finding.get("attack", "unknown")
+                },
+                source="classic_runner"
+            )
+
+        _emit_visualization_event(
+            EventType.SCAN_COMPLETE,
+            {"job_id": job_id, "target": target, "findings": len(vulnerabilities), "mode": "classic"},
+            source="classic_runner"
+        )
         
         logger.info(f"[{job_id}] Job completed. Findings: {len(vulnerabilities)}")
     
@@ -702,6 +886,228 @@ def run_assessment_background(job_id, target, target_type):
         if job_id in job_threads:
             del job_threads[job_id]
         logger.info(f"[{job_id}] Background thread cleanup complete")
+
+
+def run_swarm_assessment_background(job_id, target, target_type):
+    """Run a multi-agent swarm mission in background and publish job progress."""
+    job = assessment_jobs[job_id]
+
+    try:
+        if not SWARM_AVAILABLE:
+            raise Exception("Swarm runtime is not available")
+
+        logger.info(f"[{job_id}] Starting swarm mission for {target} (type: {target_type})")
+        job['status'] = 'running'
+        job['phase'] = 'Swarm Initialization'
+        job['progress'] = 5
+        job['started_at'] = datetime.now().isoformat()
+        job['swarm']['status'] = 'initializing'
+        _emit_visualization_event(
+            EventType.SCAN_START,
+            {"job_id": job_id, "target": target, "mode": "swarm"},
+            source="swarm_runner"
+        )
+        host_label = target
+        if target_type == "url":
+            parsed = urlparse(target)
+            host_label = parsed.netloc or target
+        _emit_visualization_event(
+            EventType.HOST_DISCOVERED,
+            {"job_id": job_id, "host": host_label},
+            source="swarm_runner"
+        )
+
+        async def _run_swarm_flow():
+            c2 = CommandControl()
+            runtime = SwarmRuntime(c2)
+
+            recon = ReconAgent()
+            strategy = StrategyAgent()
+            exploit = ExploitAgent()
+
+            runtime.register(recon)
+            runtime.register(strategy)
+            runtime.register(exploit)
+            runtime.start()
+
+            try:
+                mission = await c2.launch_mission(target=target, target_type=target_type)
+                job['swarm']['mission_id'] = mission.id
+                job['swarm']['agent_count'] = 3
+                job['swarm']['status'] = 'running'
+
+                phase_progress = {
+                    'planning': 10,
+                    'reconnaissance': 25,
+                    'vulnerability_discovery': 45,
+                    'exploitation': 65,
+                    'post_exploitation': 82,
+                    'reporting': 95,
+                    'completed': 100
+                }
+
+                last_phase = None
+                while mission.status == 'active':
+                    status = c2.get_mission_status(mission.id) or {}
+                    phase = status.get('phase', 'running')
+
+                    job['phase'] = f"Swarm: {phase.replace('_', ' ').title()}"
+                    job['progress'] = phase_progress.get(phase, job.get('progress', 10))
+                    job['swarm']['phase'] = phase
+                    job['swarm']['replans'] = mission.replans
+
+                    if phase != last_phase:
+                        _emit_visualization_event(
+                            EventType.SCAN_PROGRESS,
+                            {
+                                "job_id": job_id,
+                                "mission_id": mission.id,
+                                "phase": phase,
+                                "progress": job['progress']
+                            },
+                            source="swarm_runner"
+                        )
+                        last_phase = phase
+                    await asyncio.sleep(0.5)
+
+                final_status = c2.get_mission_status(mission.id) or {}
+                mission_report = mission.intel.get('report', {})
+
+                job['phase'] = 'Completed' if final_status.get('status') == 'completed' else 'Failed'
+                job['progress'] = 100 if final_status.get('status') == 'completed' else job.get('progress', 0)
+                job['status'] = final_status.get('status', 'completed')
+                job['report'] = mission_report or None
+                normalized_findings = _normalize_findings(mission.findings, target=target)
+                job['findings'] = normalized_findings
+                job['vulnerabilities_found'] = len(normalized_findings)
+                job['swarm']['status'] = job['status']
+                job['swarm']['phase'] = final_status.get('phase')
+                job['swarm']['replans'] = mission.replans
+
+                attempted_vulns = mission.intel.get("vulnerabilities", []) or []
+                exploited = mission.intel.get("exploitation", []) or []
+                succeeded_types = {
+                    str(item.get("vulnerability", {}).get("type", "")).lower()
+                    for item in exploited
+                    if item.get("result", {}).get("success")
+                }
+
+                for vuln in attempted_vulns:
+                    vector = vuln.get("type", "unknown")
+                    _emit_visualization_event(
+                        EventType.ATTACK_START,
+                        {
+                            "job_id": job_id,
+                            "mission_id": mission.id,
+                            "target": target,
+                            "vector": vector
+                        },
+                        source="swarm_runner"
+                    )
+                    if str(vector).lower() in succeeded_types:
+                        _emit_visualization_event(
+                            EventType.ATTACK_SUCCESS,
+                            {
+                                "job_id": job_id,
+                                "mission_id": mission.id,
+                                "target": target,
+                                "vector": vector,
+                                "vuln_type": vector
+                            },
+                            source="swarm_runner"
+                        )
+                    else:
+                        _emit_visualization_event(
+                            EventType.ATTACK_FAILED,
+                            {
+                                "job_id": job_id,
+                                "mission_id": mission.id,
+                                "target": target,
+                                "vector": vector
+                            },
+                            source="swarm_runner",
+                            severity="medium"
+                        )
+
+                for finding in normalized_findings:
+                    vector = finding.get("type") or finding.get("attack", "unknown")
+                    _emit_visualization_event(
+                        EventType.ATTACK_START,
+                        {
+                            "job_id": job_id,
+                            "mission_id": mission.id,
+                            "target": target,
+                            "vector": vector
+                        },
+                        source="swarm_runner"
+                    )
+                    _emit_visualization_event(
+                        EventType.VULN_DETECTED,
+                        {
+                            "job_id": job_id,
+                            "mission_id": mission.id,
+                            "type": vector,
+                            "severity": str(finding.get("severity", "medium")).lower(),
+                            "location": finding.get("location", target)
+                        },
+                        source="swarm_runner",
+                        severity=str(finding.get("severity", "medium")).lower()
+                    )
+                    _emit_visualization_event(
+                        EventType.ATTACK_SUCCESS,
+                        {
+                            "job_id": job_id,
+                            "mission_id": mission.id,
+                            "target": target,
+                            "vector": vector,
+                            "vuln_type": vector
+                        },
+                        source="swarm_runner"
+                    )
+
+                _emit_visualization_event(
+                    EventType.SCAN_PROGRESS,
+                    {
+                        "job_id": job_id,
+                        "mission_id": mission.id,
+                        "phase": "completed",
+                        "progress": 100
+                    },
+                    source="swarm_runner"
+                )
+
+                _emit_visualization_event(
+                    EventType.SCAN_COMPLETE,
+                    {
+                        "job_id": job_id,
+                        "mission_id": mission.id,
+                        "target": target,
+                        "findings": len(normalized_findings),
+                        "mode": "swarm"
+                    },
+                    source="swarm_runner"
+                )
+
+            finally:
+                runtime.stop()
+
+        asyncio.run(_run_swarm_flow())
+        job['completed_at'] = datetime.now().isoformat()
+
+    except Exception as e:
+        logger.error(f"[{job_id}] Swarm mission failed: {e}")
+        logger.error(f"[{job_id}] Full traceback: {traceback.format_exc()}")
+
+        job['status'] = 'failed'
+        job['error'] = str(e)
+        job['error_traceback'] = traceback.format_exc()
+        job['completed_at'] = datetime.now().isoformat()
+        job['swarm']['status'] = 'failed'
+
+    finally:
+        if job_id in job_threads:
+            del job_threads[job_id]
+        logger.info(f"[{job_id}] Swarm background thread cleanup complete")
 
 
 # ============================================================================
@@ -849,7 +1255,7 @@ def get_mitre_technique(technique_id):
 def agents_status():
     """Get multi-agent system status"""
     try:
-        from agents import CommandControl, ReconAgent, ExploitAgent
+        from agents import CommandControl, ReconAgent, ExploitAgent, StrategyAgent, SwarmRuntime
         
         return jsonify({
             "status": "ready",
@@ -868,7 +1274,28 @@ def agents_status():
                     "type": "ExploitAgent",
                     "description": "Vulnerability exploitation specialist",
                     "capabilities": ["sql_injection", "xss", "command_injection", "waf_bypass"]
+                },
+                {
+                    "type": "StrategyAgent",
+                    "description": "Planning and re-planning specialist",
+                    "capabilities": ["strategy_planning"]
                 }
+            ],
+            "runtime": {
+                "swarm_available": SWARM_AVAILABLE,
+                "runtime": "SwarmRuntime"
+            },
+            "active_swarm_jobs": [
+                {
+                    "job_id": job["id"],
+                    "target": job.get("target"),
+                    "status": job.get("status"),
+                    "mission_id": job.get("swarm", {}).get("mission_id"),
+                    "phase": job.get("swarm", {}).get("phase"),
+                    "replans": job.get("swarm", {}).get("replans", 0)
+                }
+                for job in assessment_jobs.values()
+                if job.get("mode") == "swarm"
             ],
             "message": "Multi-agent swarm ready for deployment"
         })
@@ -879,16 +1306,36 @@ def agents_status():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/swarm/<job_id>/status', methods=['GET'])
+def swarm_job_status(job_id):
+    """Get swarm-specific mission status for a job."""
+    job = assessment_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    if job.get('mode') != 'swarm':
+        return jsonify({"error": "Job is not running in swarm mode"}), 400
+
+    return jsonify({
+        "job_id": job_id,
+        "status": job.get('status'),
+        "phase": job.get('phase'),
+        "progress": job.get('progress', 0),
+        "swarm": job.get('swarm', {})
+    })
+
+
 @app.route('/api/visualization/graph', methods=['GET'])
 def get_attack_graph():
     """Get current attack graph state"""
     try:
         from visualization import get_visualization_hub
-        
+        job_id = request.args.get('job_id', '').strip() or None
         hub = get_visualization_hub()
         return jsonify({
-            "graph": hub.get_graph(),
-            "metrics": hub.get_metrics()
+            "graph": hub.get_graph(job_id=job_id),
+            "metrics": hub.get_metrics(job_id=job_id),
+            "job_id": job_id
         })
         
     except ImportError:

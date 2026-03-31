@@ -227,6 +227,13 @@
                                     <option value="ip">Network (IP Address)</option>
                                 </select>
                             </div>
+                            <div class="form-group">
+                                <label for="execution-mode">Execution Mode</label>
+                                <select id="execution-mode" name="mode" required>
+                                    <option value="classic">Classic (Single Agent)</option>
+                                    <option value="swarm">Swarm (Multi-Agent)</option>
+                                </select>
+                            </div>
                         </div>
 
                         <div class="assessment-info">
@@ -482,6 +489,18 @@
                         <span class="badge badge-enterprise">Enterprise</span>
                     </div>
                     <p style="color: #888; margin-bottom: 20px;">Coordinated attack agents working in parallel</p>
+
+                    <div style="margin-bottom: 20px; display: flex; gap: 10px; align-items: center;">
+                        <button class="btn btn-secondary btn-small" onclick="refreshSwarmStatus()">Refresh Swarm Status</button>
+                        <span id="swarm-availability" class="status-badge" style="font-size: 0.8rem;">Checking runtime...</span>
+                    </div>
+
+                    <div id="swarm-jobs" class="jobs-list" style="margin-bottom: 20px;">
+                        <div class="empty-state">
+                            <p>No swarm mission data yet</p>
+                            <small>Start an assessment in swarm mode to populate this panel</small>
+                        </div>
+                    </div>
                     
                     <div class="agents-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px;">
                         <!-- Command & Control -->

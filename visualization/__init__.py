@@ -243,11 +243,16 @@ class MetricsCollector:
     
     def record_event(self, event: VisualizationEvent):
         """Record an event and update metrics"""
+        event_job_id = event.data.get("job_id") if isinstance(event.data, dict) else None
+        event_progress = event.data.get("progress") if isinstance(event.data, dict) else None
+
         # Update timeline
         self.metrics["timeline"].append({
             "timestamp": event.timestamp,
             "type": event.event_type.value,
-            "severity": event.severity
+            "severity": event.severity,
+            "job_id": event_job_id,
+            "progress": event_progress
         })
         
         # Keep timeline manageable
@@ -311,6 +316,38 @@ class MetricsCollector:
             "attack_vectors": self.metrics["attack_vectors_used"],
             "mitre_techniques_covered": len(self.metrics["mitre_techniques"]),
             "mitre_techniques": list(self.metrics["mitre_techniques"])
+        }
+
+    def get_summary_for_job(self, job_id: str) -> Dict:
+        """Get derived metrics for a specific job from timeline events."""
+        timeline = [t for t in self.metrics["timeline"] if t.get("job_id") == job_id]
+
+        attack_progress = 0
+        for item in timeline:
+            if item.get("type") == EventType.SCAN_PROGRESS.value and item.get("progress") is not None:
+                attack_progress = int(item.get("progress", 0))
+
+        exploits_attempted = sum(1 for t in timeline if t.get("type") == EventType.ATTACK_START.value)
+        exploits_successful = sum(1 for t in timeline if t.get("type") == EventType.ATTACK_SUCCESS.value)
+        vulnerabilities_found = sum(1 for t in timeline if t.get("type") == EventType.VULN_DETECTED.value)
+
+        return {
+            "elapsed_seconds": int((datetime.now() - self._start_time).total_seconds()),
+            "attack_progress": attack_progress,
+            "hosts_scanned": sum(1 for t in timeline if t.get("type") == EventType.HOST_DISCOVERED.value),
+            "ports_discovered": sum(1 for t in timeline if t.get("type") == EventType.PORT_DISCOVERED.value),
+            "services_identified": sum(1 for t in timeline if t.get("type") == EventType.SERVICE_IDENTIFIED.value),
+            "vulnerabilities_found": vulnerabilities_found,
+            "exploits_attempted": exploits_attempted,
+            "exploits_successful": exploits_successful,
+            "success_rate": (exploits_successful / exploits_attempted * 100) if exploits_attempted else 0,
+            "agents_active": 0,
+            "messages_exchanged": 0,
+            "findings_by_severity": self.metrics["findings_by_severity"],
+            "attack_vectors": self.metrics["attack_vectors_used"],
+            "mitre_techniques_covered": len(self.metrics["mitre_techniques"]),
+            "mitre_techniques": list(self.metrics["mitre_techniques"]),
+            "timeline": timeline
         }
 
 
@@ -392,14 +429,48 @@ class VisualizationHub:
     def _update_graph_from_event(self, event: VisualizationEvent):
         """Update attack graph based on event"""
         data = event.data
+
+        def find_node(node_type: str = None, job_id: str = None, label_contains: str = None):
+            """Find the most recent node matching criteria."""
+            nodes = list(self.attack_graph.nodes.values())[::-1]
+            for node in nodes:
+                if node_type and node.type != node_type:
+                    continue
+                node_job = str(node.data.get("job_id", ""))
+                if job_id and node_job != str(job_id):
+                    continue
+                if label_contains and label_contains.lower() not in str(node.label).lower():
+                    continue
+                return node
+            return None
+
+        def ensure_job_target_node(job_id: str, target_label: str):
+            existing = find_node(node_type="target", job_id=job_id)
+            if existing:
+                return existing
+            return self.attack_graph.add_node(
+                "target",
+                target_label,
+                {"job_id": job_id, "target": target_label},
+                "info"
+            )
         
         if event.event_type == EventType.HOST_DISCOVERED:
+            job_id = data.get("job_id")
+            host = data.get("host", "Unknown")
+            target_label = data.get("target", host)
+            target_node = ensure_job_target_node(job_id, target_label)
+
             self.attack_graph.add_node(
                 "host", 
-                data.get("host", "Unknown"),
+                host,
                 data,
                 "info"
             )
+
+            host_node = find_node(node_type="host", job_id=job_id, label_contains=host)
+            if target_node and host_node:
+                self.attack_graph.add_edge(target_node.id, host_node.id, "discovered", "host_discovered")
         
         elif event.event_type == EventType.PORT_DISCOVERED:
             node = self.attack_graph.add_node(
@@ -424,20 +495,51 @@ class VisualizationHub:
                 data,
                 severity
             )
+
+            job_id = data.get("job_id")
+            host_node = find_node(node_type="host", job_id=job_id)
+            if host_node:
+                self.attack_graph.add_edge(host_node.id, node.id, "discovered", "vuln_detected")
         
         elif event.event_type == EventType.ATTACK_START:
-            # Update edge to show attack
-            target_id = data.get("target_node")
-            if target_id and target_id in self.attack_graph.nodes:
-                self.attack_graph.update_node_status(target_id, "attacking")
+            job_id = data.get("job_id")
+            vector = data.get("vector", "Unknown Attack")
+
+            attack_node = self.attack_graph.add_node(
+                "exploit",
+                f"Attack: {vector}",
+                data,
+                "high"
+            )
+            self.attack_graph.update_node_status(attack_node.id, "attacking", "high")
+
+            source_node = find_node(node_type="vulnerability", job_id=job_id, label_contains=vector)
+            if not source_node:
+                source_node = find_node(node_type="host", job_id=job_id)
+            if source_node:
+                self.attack_graph.add_edge(source_node.id, attack_node.id, "attacking", vector)
         
         elif event.event_type == EventType.ATTACK_SUCCESS:
-            node = self.attack_graph.add_node(
-                "exploit",
-                f"Exploited: {data.get('vuln_type', 'Unknown')}",
-                data,
-                "critical"
-            )
+            job_id = data.get("job_id")
+            vector = data.get("vector") or data.get("vuln_type", "Unknown")
+            attack_node = find_node(node_type="exploit", job_id=job_id, label_contains=vector)
+            if attack_node:
+                self.attack_graph.update_node_status(attack_node.id, "exploited", "critical")
+            else:
+                node = self.attack_graph.add_node(
+                    "exploit",
+                    f"Exploited: {vector}",
+                    data,
+                    "critical"
+                )
+                self.attack_graph.update_node_status(node.id, "exploited", "critical")
+
+        elif event.event_type == EventType.ATTACK_FAILED:
+            job_id = data.get("job_id")
+            vector = data.get("vector", "Unknown")
+            attack_node = find_node(node_type="exploit", job_id=job_id, label_contains=vector)
+            if attack_node:
+                self.attack_graph.update_node_status(attack_node.id, "failed", "medium")
     
     async def _broadcast_loop(self):
         """Main broadcast loop"""
@@ -490,12 +592,27 @@ class VisualizationHub:
             logger.debug(f"Failed to send to client: {e}")
             raise
     
-    def get_graph(self) -> Dict:
-        """Get current attack graph"""
-        return self.attack_graph.to_dict()
+    def get_graph(self, job_id: Optional[str] = None) -> Dict:
+        """Get current attack graph, optionally filtered by job_id."""
+        graph = self.attack_graph.to_dict()
+        if not job_id:
+            return graph
+
+        filtered_nodes = [
+            n for n in graph.get("nodes", [])
+            if str(n.get("data", {}).get("job_id", "")) == job_id
+        ]
+        node_ids = {n["id"] for n in filtered_nodes}
+        filtered_edges = [
+            e for e in graph.get("edges", [])
+            if e.get("source") in node_ids and e.get("target") in node_ids
+        ]
+        return {"nodes": filtered_nodes, "edges": filtered_edges}
     
-    def get_metrics(self) -> Dict:
-        """Get current metrics"""
+    def get_metrics(self, job_id: Optional[str] = None) -> Dict:
+        """Get metrics summary, optionally scoped to a specific job_id."""
+        if job_id:
+            return self.metrics.get_summary_for_job(job_id)
         return self.metrics.get_summary()
     
     def create_event(self, event_type: EventType, data: Dict,

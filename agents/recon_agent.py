@@ -416,7 +416,8 @@ class ReconAgent(BaseAgent):
                 security_missing.append("X-Frame-Options")
             if "x-content-type-options" not in headers:
                 security_missing.append("X-Content-Type-Options")
-            if "strict-transport-security" not in headers:
+            # HSTS is meaningful for HTTPS targets; skip it for plain HTTP endpoints.
+            if url.lower().startswith("https://") and "strict-transport-security" not in headers:
                 security_missing.append("Strict-Transport-Security")
             if "content-security-policy" not in headers:
                 security_missing.append("Content-Security-Policy")
@@ -602,6 +603,9 @@ class ReconAgent(BaseAgent):
         # Check tech stack for known vulnerable components
         for tech in results.get("technologies", []):
             if tech.get("category") == "security_issue":
+                if tech.get("name") == "Missing Security Headers":
+                    # This is already emitted as a dedicated finding in _detect_technologies.
+                    continue
                 risks.append({
                     "type": "security_misconfiguration",
                     "severity": "medium",

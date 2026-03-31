@@ -46,6 +46,7 @@
             font-size: 1.5rem;
             font-weight: 600;
             background: linear-gradient(135deg, #ff4444 0%, #ff6b6b 100%);
+            background-clip: text;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             display: flex;
@@ -72,6 +73,33 @@
             display: flex;
             align-items: center;
             gap: 20px;
+        }
+
+        .job-filter {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: 10px;
+        }
+
+        .job-filter input {
+            background: #12121a;
+            color: #e0e0e0;
+            border: 1px solid #2a2a3e;
+            border-radius: 8px;
+            padding: 6px 10px;
+            font-size: 0.85rem;
+            min-width: 170px;
+        }
+
+        .job-filter button {
+            background: #ff4444;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 7px 10px;
+            font-size: 0.8rem;
+            cursor: pointer;
         }
         
         .status-badge {
@@ -358,6 +386,10 @@
                     <span class="status-dot"></span>
                     <span>Scanning...</span>
                 </div>
+                <div class="job-filter">
+                    <input id="job-id-filter" type="text" placeholder="job_id (optional)">
+                    <button id="apply-job-filter" type="button">Apply</button>
+                </div>
             </div>
         </header>
         
@@ -475,74 +507,109 @@
         // Initialize visualization
         const viz = new AttackVisualization('attack-graph');
         const dashboard = new MetricsDashboard('metrics-container');
-        
-        // WebSocket URL (adjust for your setup)
-        const wsUrl = `ws://${window.location.host}/ws/visualization`;
-        const connection = new VisualizationConnection(wsUrl, viz, dashboard);
-        
-        // Connect
-        // connection.connect();
-        
-        // For demo without WebSocket, add some sample nodes
-        setTimeout(() => {
-            viz.addNode({
-                id: 'target_1',
-                type: 'target',
-                label: 'example.com',
-                position: { x: 0, y: 0, z: 0 },
-                severity: 'info',
-                status: 'scanned'
+        let selectedJobId = new URLSearchParams(window.location.search).get('job') || '';
+
+        const filterInput = document.getElementById('job-id-filter');
+        const filterButton = document.getElementById('apply-job-filter');
+        if (filterInput) {
+            filterInput.value = selectedJobId;
+        }
+        if (filterButton) {
+            filterButton.addEventListener('click', () => {
+                selectedJobId = (filterInput.value || '').trim();
+                const url = new URL(window.location.href);
+                if (selectedJobId) {
+                    url.searchParams.set('job', selectedJobId);
+                } else {
+                    url.searchParams.delete('job');
+                }
+                window.history.replaceState({}, '', url.toString());
+                viz.clear();
+                refreshVisualizationState();
             });
-            
-            viz.addNode({
-                id: 'host_1',
-                type: 'host',
-                label: '192.168.1.1',
-                position: { x: -50, y: 20, z: 20 },
-                severity: 'info',
-                status: 'discovered'
-            });
-            
-            viz.addNode({
-                id: 'service_1',
-                type: 'service',
-                label: '80/HTTP',
-                position: { x: -80, y: 0, z: 40 },
-                severity: 'info',
-                status: 'identified'
-            });
-            
-            viz.addNode({
-                id: 'vuln_1',
-                type: 'vulnerability',
-                label: 'SQL Injection',
-                position: { x: -100, y: -20, z: 60 },
-                severity: 'critical',
-                status: 'detected'
-            });
-            
-            viz.addEdge({
-                id: 'edge_1',
-                source: 'target_1',
-                target: 'host_1',
-                type: 'discovered'
-            });
-            
-            viz.addEdge({
-                id: 'edge_2',
-                source: 'host_1',
-                target: 'service_1',
-                type: 'discovered'
-            });
-            
-            viz.addEdge({
-                id: 'edge_3',
-                source: 'service_1',
-                target: 'vuln_1',
-                type: 'attacking',
-                animated: true
-            });
-        }, 1000);
+        }
+
+        function updateTimeline(metrics) {
+            const timeline = document.getElementById('activity-timeline');
+            const items = (metrics.timeline || []).slice(-12).reverse();
+
+            if (!items.length) {
+                timeline.innerHTML = `
+                    <div class="timeline-item">
+                        <div class="timeline-severity info"></div>
+                        <span class="timeline-time">--:--</span>
+                        <span class="timeline-event">Waiting for events...</span>
+                    </div>
+                `;
+                return;
+            }
+
+            timeline.innerHTML = items.map(item => {
+                const t = new Date(item.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const sev = (item.severity || 'info').toLowerCase();
+                return `
+                    <div class="timeline-item">
+                        <div class="timeline-severity ${sev}"></div>
+                        <span class="timeline-time">${t}</span>
+                        <span class="timeline-event">${item.type}</span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function updateHeaderStatus(metrics) {
+            const connectionBadge = document.getElementById('connection-status');
+            const scanBadge = document.getElementById('scan-status');
+            const scanBadgeText = scanBadge ? scanBadge.querySelector('span:last-child') : null;
+
+            const active = (metrics.agents_active || 0) > 0 || (metrics.attack_progress || 0) > 0;
+            if (connectionBadge) {
+                connectionBadge.classList.add('active');
+            }
+            if (scanBadge) {
+                scanBadge.classList.toggle('active', active);
+            }
+            if (scanBadgeText) {
+                scanBadgeText.textContent = active ? 'Scanning...' : 'Idle';
+            }
+
+            const hostsEl = document.getElementById('metric-hosts');
+            const vulnsEl = document.getElementById('metric-vulns');
+            const progressEl = document.getElementById('metric-progress');
+            const progressFillEl = document.getElementById('progress-fill');
+            const agentsEl = document.getElementById('metric-agents');
+            const mitreEl = document.getElementById('mitre-count');
+
+            if (hostsEl) hostsEl.textContent = metrics.hosts_scanned || 0;
+            if (vulnsEl) vulnsEl.textContent = metrics.vulnerabilities_found || 0;
+            if (progressEl) progressEl.textContent = `${Math.round(metrics.attack_progress || 0)}%`;
+            if (progressFillEl) progressFillEl.style.width = `${Math.round(metrics.attack_progress || 0)}%`;
+            if (agentsEl) agentsEl.textContent = metrics.agents_active || 0;
+            if (mitreEl) mitreEl.textContent = metrics.mitre_techniques_covered || 0;
+        }
+
+        async function refreshVisualizationState() {
+            try {
+                let endpoint = '/api/visualization/graph';
+                if (selectedJobId) {
+                    endpoint += `?job_id=${encodeURIComponent(selectedJobId)}`;
+                }
+                const response = await fetch(endpoint);
+                if (!response.ok) {
+                    return;
+                }
+                const data = await response.json();
+                viz.updateFromState(data.graph || { nodes: [], edges: [] });
+                dashboard.update(data.metrics || {});
+                updateTimeline(data.metrics || {});
+                updateHeaderStatus(data.metrics || {});
+            } catch (error) {
+                console.error('Visualization refresh error:', error);
+            }
+        }
+
+        refreshVisualizationState();
+        setInterval(refreshVisualizationState, 1500);
         
         // Handle node clicks
         document.getElementById('attack-graph').addEventListener('nodeClick', (e) => {
