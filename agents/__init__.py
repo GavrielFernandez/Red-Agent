@@ -18,6 +18,7 @@ from .base_agent import BaseAgent, AgentMessage, AgentStatus
 from .command_control import CommandControl
 from .recon_agent import ReconAgent
 from .exploit_agent import ExploitAgent
+from .business_logic_agent import BusinessLogicAgent
 from .strategy_agent import StrategyAgent
 from .swarm_runtime import SwarmRuntime
 
@@ -28,6 +29,7 @@ __all__ = [
     'CommandControl',
     'ReconAgent',
     'ExploitAgent',
+    'BusinessLogicAgent',
     'StrategyAgent',
     'SwarmRuntime'
 ]

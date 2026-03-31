@@ -300,6 +300,7 @@ class CommandControl(BaseAgent):
         """Execute vulnerability discovery"""
         # Use exploit agents for scanning
         exploit_agents = self.agent_pool.find_by_capability("vulnerability_scanning")
+        logic_agents = self.agent_pool.find_by_capability("business_logic_analysis")
         
         discovered = []
         
@@ -313,6 +314,20 @@ class CommandControl(BaseAgent):
             
             if result.success and result.data:
                 discovered.extend(result.data.get("vulnerabilities", []))
+                mission.findings.extend(agent.findings)
+
+        # Run business logic analysis in the same phase and merge results.
+        for agent in logic_agents:
+            result = await agent.run_with_retry({
+                "id": f"{mission.id}_business_logic_scan",
+                "type": "business_logic_scan",
+                "target": mission.target,
+                "intel": mission.intel.get("reconnaissance", {})
+            })
+
+            if result.success and result.data:
+                discovered.extend(result.data.get("vulnerabilities", []))
+                mission.intel["business_logic"] = result.data
                 mission.findings.extend(agent.findings)
         
         mission.intel["vulnerabilities"] = discovered

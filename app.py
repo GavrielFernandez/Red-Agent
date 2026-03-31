@@ -48,7 +48,7 @@ except ImportError as e:
 
 # Import Swarm Agent Runtime (independent from enterprise modules)
 try:
-    from agents import CommandControl, ReconAgent, ExploitAgent, StrategyAgent, SwarmRuntime
+    from agents import CommandControl, ReconAgent, ExploitAgent, BusinessLogicAgent, StrategyAgent, SwarmRuntime
     SWARM_AVAILABLE = True
     print("[+] Swarm runtime loaded")
 except ImportError as e:
@@ -1006,16 +1006,18 @@ def run_swarm_assessment_background(job_id, target, target_type):
             recon = ReconAgent()
             strategy = StrategyAgent()
             exploit = ExploitAgent()
+            logic = BusinessLogicAgent()
 
             runtime.register(recon)
             runtime.register(strategy)
             runtime.register(exploit)
+            runtime.register(logic)
             runtime.start()
 
             try:
                 mission = await c2.launch_mission(target=target, target_type=target_type)
                 job['swarm']['mission_id'] = mission.id
-                job['swarm']['agent_count'] = 3
+                job['swarm']['agent_count'] = 4
                 job['swarm']['status'] = 'running'
 
                 phase_progress = {
@@ -1337,7 +1339,7 @@ def get_mitre_technique(technique_id):
 def agents_status():
     """Get multi-agent system status"""
     try:
-        from agents import CommandControl, ReconAgent, ExploitAgent, StrategyAgent, SwarmRuntime
+        from agents import CommandControl, ReconAgent, ExploitAgent, BusinessLogicAgent, StrategyAgent, SwarmRuntime
         
         return jsonify({
             "status": "ready",
@@ -1356,6 +1358,11 @@ def agents_status():
                     "type": "ExploitAgent",
                     "description": "Vulnerability exploitation specialist",
                     "capabilities": ["sql_injection", "xss", "command_injection", "waf_bypass"]
+                },
+                {
+                    "type": "BusinessLogicAgent",
+                    "description": "Workflow and access-control logic analysis specialist",
+                    "capabilities": ["business_logic_analysis"]
                 },
                 {
                     "type": "StrategyAgent",
