@@ -12,6 +12,7 @@ The brain of the RedAgent swarm. Responsibilities:
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
@@ -52,6 +53,19 @@ class Mission:
     progress: float = 0.0
     status: str = "active"
     replans: int = 0
+    phase_history: List[Dict[str, Any]] = field(default_factory=list)
+    phase_started_at: Optional[datetime] = None
+    last_phase_change_at: Optional[datetime] = None
+    phase_durations: Dict[str, float] = field(default_factory=dict)
+    agent_timings: Dict[str, float] = field(default_factory=dict)
+    attack_metrics: Dict[str, Any] = field(default_factory=lambda: {
+        "attempted": 0,
+        "successful": 0,
+        "failed": 0,
+        "success_rate": 0.0,
+        "replan_count": 0,
+        "fallback_attacks_used": False
+    })
 
 
 class CommandControl(BaseAgent):
@@ -178,39 +192,35 @@ class CommandControl(BaseAgent):
         """Execute a mission through all phases"""
         try:
             # Phase 1: Planning
-            mission.phase = MissionPhase.PLANNING
-            self.set_progress(0.05, "Planning attack strategy")
+            self._enter_phase(mission, MissionPhase.PLANNING, 0.05, "Planning attack strategy")
             await self._plan_attack(mission)
             
             # Phase 2: Reconnaissance
-            mission.phase = MissionPhase.RECONNAISSANCE
-            self.set_progress(0.15, "Starting reconnaissance")
+            self._enter_phase(mission, MissionPhase.RECONNAISSANCE, 0.15, "Starting reconnaissance")
             await self._execute_reconnaissance(mission)
             
             # Phase 3: Vulnerability Discovery
-            mission.phase = MissionPhase.VULNERABILITY_DISCOVERY
-            self.set_progress(0.35, "Discovering vulnerabilities")
+            self._enter_phase(mission, MissionPhase.VULNERABILITY_DISCOVERY, 0.35, "Discovering vulnerabilities")
             await self._execute_vulnerability_discovery(mission)
             
             # Phase 4: Exploitation
-            mission.phase = MissionPhase.EXPLOITATION
-            self.set_progress(0.55, "Executing exploitation")
+            self._enter_phase(mission, MissionPhase.EXPLOITATION, 0.55, "Executing exploitation")
             await self._execute_exploitation(mission)
             
             # Phase 5: Post-Exploitation
-            mission.phase = MissionPhase.POST_EXPLOITATION
-            self.set_progress(0.75, "Post-exploitation analysis")
+            self._enter_phase(mission, MissionPhase.POST_EXPLOITATION, 0.75, "Post-exploitation analysis")
             await self._execute_post_exploitation(mission)
             
             # Phase 6: Reporting
-            mission.phase = MissionPhase.REPORTING
-            self.set_progress(0.90, "Generating report")
+            self._enter_phase(mission, MissionPhase.REPORTING, 0.90, "Generating report")
             await self._generate_mission_report(mission)
             
             # Complete
+            self._finalize_current_phase(mission)
             mission.phase = MissionPhase.COMPLETED
             mission.completed_at = datetime.now()
             mission.status = "completed"
+            mission.progress = 1.0
             self.set_progress(1.0, "Mission complete")
             
             # Move to completed
@@ -223,6 +233,39 @@ class CommandControl(BaseAgent):
             logger.error(f"Mission {mission.id} failed: {e}")
             mission.status = "failed"
             mission.intel["error"] = str(e)
+
+    def _enter_phase(self, mission: Mission, phase: MissionPhase, progress: float, message: str):
+        """Record mission phase transition with timing telemetry."""
+        self._finalize_current_phase(mission)
+
+        now = datetime.now()
+        mission.phase = phase
+        mission.progress = progress
+        mission.phase_started_at = now
+        mission.last_phase_change_at = now
+        mission.phase_history.append({
+            "phase": phase.value,
+            "started_at": now.isoformat(),
+            "progress": progress
+        })
+        self.set_progress(progress, message)
+
+    def _finalize_current_phase(self, mission: Mission):
+        """Close timing window for active phase before transitioning."""
+        if not mission.phase_started_at:
+            return
+
+        elapsed = max(0.0, (datetime.now() - mission.phase_started_at).total_seconds())
+        phase_key = mission.phase.value
+        mission.phase_durations[phase_key] = mission.phase_durations.get(phase_key, 0.0) + elapsed
+        mission.phase_started_at = None
+
+    async def _run_agent_task(self, mission: Mission, agent: BaseAgent, task: Dict[str, Any], timing_key: str) -> TaskResult:
+        """Run agent task with duration tracking."""
+        started = time.perf_counter()
+        result = await agent.run_with_retry(task)
+        mission.agent_timings[timing_key] = mission.agent_timings.get(timing_key, 0.0) + (time.perf_counter() - started)
+        return result
     
     async def _plan_attack(self, mission: Mission):
         """Plan the attack strategy using LLM"""
@@ -281,12 +324,12 @@ class CommandControl(BaseAgent):
         
         if recon_agents:
             agent = recon_agents[0]
-            result = await agent.run_with_retry({
+            result = await self._run_agent_task(mission, agent, {
                 "id": f"{mission.id}_recon",
                 "type": "full_recon",
                 "target": mission.target,
                 "target_type": mission.target_type
-            })
+            }, "reconnaissance")
             
             if result.success:
                 mission.intel["reconnaissance"] = result.data
@@ -305,12 +348,12 @@ class CommandControl(BaseAgent):
         discovered = []
         
         for agent in exploit_agents:
-            result = await agent.run_with_retry({
+            result = await self._run_agent_task(mission, agent, {
                 "id": f"{mission.id}_vuln_scan",
                 "type": "vulnerability_scan",
                 "target": mission.target,
                 "intel": mission.intel.get("reconnaissance", {})
-            })
+            }, "vulnerability_scan")
             
             if result.success and result.data:
                 discovered.extend(result.data.get("vulnerabilities", []))
@@ -318,12 +361,12 @@ class CommandControl(BaseAgent):
 
         # Run business logic analysis in the same phase and merge results.
         for agent in logic_agents:
-            result = await agent.run_with_retry({
+            result = await self._run_agent_task(mission, agent, {
                 "id": f"{mission.id}_business_logic_scan",
                 "type": "business_logic_scan",
                 "target": mission.target,
                 "intel": mission.intel.get("reconnaissance", {})
-            })
+            }, "business_logic_scan")
 
             if result.success and result.data:
                 discovered.extend(result.data.get("vulnerabilities", []))
@@ -331,30 +374,35 @@ class CommandControl(BaseAgent):
                 mission.findings.extend(agent.findings)
         
         mission.intel["vulnerabilities"] = discovered
+        mission.intel["vulnerability_summary"] = {
+            "total_discovered": len(discovered),
+            "by_type": self._count_by(discovered, key="type"),
+            "by_severity": self._count_by(discovered, key="severity")
+        }
     
     async def _execute_exploitation(self, mission: Mission):
         """Execute exploitation attempts"""
         exploit_agents = self.agent_pool.find_by_capability("exploitation")
+        if not exploit_agents:
+            mission.intel["exploitation"] = []
+            mission.attack_metrics["failed"] = mission.attack_metrics.get("failed", 0) + 1
+            return
         
         vulnerabilities = mission.intel.get("vulnerabilities", [])
         exploitation_results = []
-        
-        # Prioritize by severity
-        sorted_vulns = sorted(
-            vulnerabilities,
-            key=lambda v: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(
-                v.get("severity", "low").lower(), 4
-            )
-        )
-        
-        for vuln in sorted_vulns[:10]:  # Top 10 vulnerabilities
+
+        sorted_vulns = self._prioritize_vulnerabilities(vulnerabilities)
+        mission.attack_metrics["attempted"] = min(12, len(sorted_vulns))
+
+        for vuln in sorted_vulns[:12]:
+            vuln_succeeded = False
             for agent in exploit_agents:
-                result = await agent.run_with_retry({
+                result = await self._run_agent_task(mission, agent, {
                     "id": f"{mission.id}_exploit_{vuln.get('id', 'unknown')}",
                     "type": "exploit",
                     "vulnerability": vuln,
                     "target": mission.target
-                })
+                }, "exploit_execution")
                 
                 if result.success:
                     exploitation_results.append({
@@ -363,14 +411,41 @@ class CommandControl(BaseAgent):
                         "agent": agent.agent_id
                     })
                     mission.findings.extend(agent.findings)
-                    break  # Move to next vuln if exploited
+                    vuln_succeeded = True
+                    break
+
+            if vuln_succeeded:
+                mission.attack_metrics["successful"] = mission.attack_metrics.get("successful", 0) + 1
+            else:
+                mission.attack_metrics["failed"] = mission.attack_metrics.get("failed", 0) + 1
+
+        if not sorted_vulns:
+            # Fall back to deterministic low-noise probes when discovery returns empty.
+            primary_agent = exploit_agents[0]
+            fallback = await self._run_agent_task(mission, primary_agent, {
+                "id": f"{mission.id}_focused_attack_fallback",
+                "type": "focused_attack",
+                "target": mission.target
+            }, "fallback_focused_attack")
+
+            mission.attack_metrics["fallback_attacks_used"] = True
+            if fallback.success and fallback.data:
+                fallback_vulns = fallback.data.get("vulnerabilities", [])
+                mission.intel.setdefault("vulnerabilities", []).extend(fallback_vulns)
+                mission.findings.extend(primary_agent.findings)
+                attempted_vectors = int(fallback.data.get("attack_attempts", 0))
+                mission.attack_metrics["attempted"] = attempted_vectors
+                mission.attack_metrics["successful"] = len(fallback.data.get("successful_exploits", []))
+                mission.attack_metrics["failed"] = max(0, attempted_vectors - mission.attack_metrics["successful"])
         
         mission.intel["exploitation"] = exploitation_results
+        attempted = max(1, mission.attack_metrics.get("attempted", 0))
+        mission.attack_metrics["success_rate"] = round((mission.attack_metrics.get("successful", 0) / attempted) * 100.0, 2)
 
         if sorted_vulns:
-            failed_attempts = max(0, len(sorted_vulns[:10]) - len(exploitation_results))
+            failed_attempts = max(0, min(12, len(sorted_vulns)) - len(exploitation_results))
             if failed_attempts > 0:
-                await self._request_replan(mission, failed_attempts, sorted_vulns[:10])
+                await self._request_replan(mission, failed_attempts, sorted_vulns[:12])
 
     async def _request_replan(self, mission: Mission, failed_attempts: int, attempted: List[Dict[str, Any]]):
         """Ask strategy agent to revise the mission approach when execution underperforms."""
@@ -393,7 +468,36 @@ class CommandControl(BaseAgent):
 
         if result.success:
             mission.replans += 1
+            mission.attack_metrics["replan_count"] = mission.replans
             mission.intel["strategy_replan"] = result.data
+
+    def _prioritize_vulnerabilities(self, vulnerabilities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Prioritize exploitation order using severity + confidence + status."""
+        if not vulnerabilities:
+            return []
+
+        severity_score = {"critical": 100, "high": 75, "medium": 45, "low": 20, "info": 5}
+
+        def score(v: Dict[str, Any]) -> float:
+            sev = str(v.get("severity", "low")).lower()
+            confidence = float(v.get("confidence_score") or 55)
+            status = str(v.get("status") or v.get("exploitation_status") or "").lower()
+
+            points = severity_score.get(sev, 20) + confidence
+            if "confirmed" in status or "vulnerable" in status:
+                points += 25
+            if str(v.get("type", "")).startswith("business_logic_"):
+                points += 10
+            return points
+
+        return sorted(vulnerabilities, key=score, reverse=True)
+
+    def _count_by(self, rows: List[Dict[str, Any]], key: str) -> Dict[str, int]:
+        summary: Dict[str, int] = {}
+        for row in rows:
+            label = str(row.get(key, "unknown")).lower()
+            summary[label] = summary.get(label, 0) + 1
+        return summary
     
     async def _execute_post_exploitation(self, mission: Mission):
         """Post-exploitation phase"""
@@ -458,7 +562,13 @@ class CommandControl(BaseAgent):
                 "post_exploitation": mission.intel.get("post_exploitation", {})
             },
             "impact": mission.intel.get("post_exploitation", {}).get("impact_assessment", {}),
-            "agents_used": list(self.agent_pool.agents.keys())
+            "agents_used": list(self.agent_pool.agents.keys()),
+            "telemetry": {
+                "phase_history": mission.phase_history,
+                "phase_durations": mission.phase_durations,
+                "agent_timings": mission.agent_timings,
+                "attack_metrics": mission.attack_metrics
+            }
         }
     
     def _handle_intel(self, msg: AgentMessage):
@@ -605,7 +715,12 @@ class CommandControl(BaseAgent):
             "progress": mission.progress,
             "findings_count": len(mission.findings),
             "started_at": mission.started_at.isoformat(),
-            "completed_at": mission.completed_at.isoformat() if mission.completed_at else None
+            "completed_at": mission.completed_at.isoformat() if mission.completed_at else None,
+            "last_phase_change_at": mission.last_phase_change_at.isoformat() if mission.last_phase_change_at else None,
+            "phase_history": mission.phase_history,
+            "phase_durations": mission.phase_durations,
+            "agent_timings": mission.agent_timings,
+            "attack_metrics": mission.attack_metrics
         }
     
     def get_swarm_status(self) -> Dict[str, Any]:

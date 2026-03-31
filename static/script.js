@@ -138,9 +138,101 @@ async function updateDashboard() {
         const jobsData = await jobsResponse.json();
 
         displayActiveJobs(jobsData.jobs || []);
+        displayBusinessLogicInsights(jobsData.jobs || []);
+        displayAttackAnalytics(jobsData.jobs || []);
     } catch (error) {
         console.error('Dashboard update error:', error);
     }
+}
+
+function displayAttackAnalytics(jobs) {
+    const modeEl = document.getElementById('attack-analytics-mode');
+    const attemptsEl = document.getElementById('attack-attempts');
+    const successRateEl = document.getElementById('attack-success-rate');
+    const fallbackEl = document.getElementById('attack-fallback-used');
+    const avgDurationEl = document.getElementById('attack-avg-exploit-duration');
+    const contextEl = document.getElementById('attack-analytics-context');
+
+    if (!modeEl || !attemptsEl || !successRateEl || !fallbackEl || !avgDurationEl || !contextEl) return;
+
+    const latestSwarm = [...jobs]
+        .filter(job => job.mode === 'swarm' && job.swarm)
+        .sort((a, b) => new Date(b.completed_at || b.created_at || 0) - new Date(a.completed_at || a.created_at || 0))[0];
+
+    if (!latestSwarm) {
+        modeEl.textContent = 'n/a';
+        attemptsEl.textContent = '0';
+        successRateEl.textContent = '0%';
+        fallbackEl.textContent = 'No';
+        avgDurationEl.textContent = '0.00s';
+        contextEl.textContent = 'Waiting for completed swarm assessment telemetry.';
+        return;
+    }
+
+    const metrics = latestSwarm.swarm.attack_metrics || {};
+    const timings = latestSwarm.swarm.agent_timings || {};
+
+    const attempts = Number(metrics.attempted || 0);
+    const successRate = Number(metrics.success_rate || 0);
+    const fallbackUsed = Boolean(metrics.fallback_attacks_used);
+    const exploitTotal = Number(timings.exploit_execution || 0) + Number(timings.fallback_focused_attack || 0);
+    const avgExploitDuration = attempts > 0 ? (exploitTotal / attempts) : 0;
+
+    modeEl.textContent = fallbackUsed ? 'focused_fallback' : 'priority_exploit';
+    attemptsEl.textContent = String(attempts);
+    successRateEl.textContent = `${successRate}%`;
+    fallbackEl.textContent = fallbackUsed ? 'Yes' : 'No';
+    avgDurationEl.textContent = `${avgExploitDuration.toFixed(2)}s`;
+    contextEl.textContent = `Latest swarm mission: ${latestSwarm.swarm.mission_id || latestSwarm.id} | status: ${latestSwarm.status}`;
+}
+
+function displayBusinessLogicInsights(jobs) {
+    const container = document.getElementById('business-logic-container');
+    const badge = document.getElementById('business-logic-count');
+    if (!container || !badge) return;
+
+    const rows = [];
+    jobs.forEach(job => {
+        const findings = Array.isArray(job.findings) ? job.findings : [];
+        findings
+            .filter(isBusinessLogicFinding)
+            .forEach(finding => rows.push({ job, finding }));
+    });
+
+    badge.textContent = rows.length;
+    if (!rows.length) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <p>No business-logic findings yet</p>
+                <small>Run assessments to populate workflow and access-control insights</small>
+            </div>
+        `;
+        return;
+    }
+
+    const topRows = rows.slice(0, 12);
+    container.innerHTML = topRows.map(({ job, finding }) => {
+        const severity = String(finding.severity || 'medium').toLowerCase();
+        return `
+            <div class="job-card">
+                <div class="job-header">
+                    <div class="job-title">${escapeHtml(job.target || job.id)}</div>
+                    <span class="job-status status-${escapeHtml(severity)}">${escapeHtml(severity.toUpperCase())}</span>
+                </div>
+                <div class="job-meta">
+                    <div class="job-meta-item"><span>Variant:</span><strong>${escapeHtml(finding.attack_variant || finding.type || 'Business Logic')}</strong></div>
+                    <div class="job-meta-item"><span>Confidence:</span><strong>${Number(finding.confidence_score || 0)}%</strong></div>
+                    <div class="job-meta-item"><span>Evidence:</span><strong>${escapeHtml(finding.evidence_strength || 'moderate')}</strong></div>
+                </div>
+                <div style="margin-top:0.75rem;color:var(--text-muted);font-size:0.9rem;">
+                    ${escapeHtml(finding.description || 'Business-logic condition detected')}
+                </div>
+                <div class="job-actions" style="margin-top:0.75rem;">
+                    <button class="btn btn-secondary btn-small" onclick="viewJobDetails('${escapeHtml(job.id)}')">View Job</button>
+                </div>
+            </div>
+        `;
+    }).join('');
 }
 
 function displayActiveJobs(jobs) {
@@ -166,6 +258,9 @@ function displayActiveJobs(jobs) {
 
 function createJobCard(job) {
     const findingsCount = Array.isArray(job.findings) ? job.findings.length : 0;
+    const businessLogicCount = Array.isArray(job.findings)
+        ? job.findings.filter(isBusinessLogicFinding).length
+        : 0;
     const progress = job.progress || 0;
     const mode = (job.mode || 'classic').toUpperCase();
 
@@ -185,6 +280,7 @@ function createJobCard(job) {
             <div class="progress-bar"><div class="progress-fill" style="width:${progress}%"></div></div>
 
             ${findingsCount > 0 ? `<div class="job-findings"><strong>Vulnerabilities Found: ${findingsCount}</strong></div>` : ''}
+            ${businessLogicCount > 0 ? `<div class="job-findings" style="margin-top:0.35rem;"><strong>Business Logic Findings: ${businessLogicCount}</strong></div>` : ''}
 
             <div class="job-actions">
                 <button class="btn btn-secondary btn-small" onclick="viewJobDetails('${escapeHtml(job.id)}')">Details</button>
@@ -276,6 +372,31 @@ async function viewJobDetails(jobId) {
 
         const modal = document.getElementById('job-modal');
         const modalBody = document.getElementById('modal-body');
+        const findings = Array.isArray(job.findings) ? job.findings : [];
+        const businessLogicFindings = findings.filter(isBusinessLogicFinding);
+        const findingsMarkup = businessLogicFindings.length
+            ? `
+                <div>
+                    <strong style="color:var(--text-muted);display:block;font-size:0.85rem;">Business Logic Findings</strong>
+                    <div style="display:grid;gap:0.65rem;margin-top:0.5rem;">
+                        ${businessLogicFindings.slice(0, 8).map(f => `
+                            <div style="padding:0.65rem;border:1px solid var(--border-color);border-radius:8px;background:rgba(255,255,255,0.02);">
+                                <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:center;">
+                                    <strong>${escapeHtml(f.attack_variant || f.type || 'Business Logic')}</strong>
+                                    <span class="job-status status-${escapeHtml(String(f.severity || 'medium').toLowerCase())}">${escapeHtml(String(f.severity || 'medium').toUpperCase())}</span>
+                                </div>
+                                <div style="margin-top:0.4rem;color:var(--text-muted);font-size:0.9rem;">${escapeHtml(f.description || '')}</div>
+                                <div style="display:flex;gap:0.75rem;margin-top:0.5rem;font-size:0.85rem;color:var(--text-muted);">
+                                    <span>Family: ${escapeHtml(f.attack_family || 'Business Logic')}</span>
+                                    <span>Confidence: ${Number(f.confidence_score || 0)}%</span>
+                                    <span>Evidence: ${escapeHtml(f.evidence_strength || 'moderate')}</span>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `
+            : '';
 
         modalBody.innerHTML = `
             <div style="display:grid;gap:1rem;">
@@ -286,7 +407,9 @@ async function viewJobDetails(jobId) {
                 </div>
                 <div><strong style="color:var(--text-muted);display:block;font-size:0.85rem;">Mode</strong><div>${escapeHtml((job.mode || 'classic').toUpperCase())}</div></div>
                 <div><strong style="color:var(--text-muted);display:block;font-size:0.85rem;">Current Phase</strong><div>${escapeHtml(job.phase || 'Initializing')}</div></div>
+                <div><strong style="color:var(--text-muted);display:block;font-size:0.85rem;">Findings Summary</strong><div>Total: ${findings.length} | Business Logic: ${businessLogicFindings.length}</div></div>
                 ${job.mode === 'swarm' ? `<div><strong style="color:var(--text-muted);display:block;font-size:0.85rem;">Swarm Mission</strong><div>${escapeHtml(job.swarm?.mission_id || 'pending')} | replans: ${job.swarm?.replans || 0}</div></div>` : ''}
+                ${findingsMarkup}
                 <div style="padding-top:1rem;border-top:1px solid var(--border-color);display:flex;gap:0.5rem;">
                     ${job.status === 'completed' && job.report ? `<button class="btn btn-primary btn-small" onclick="openJobReport('${escapeHtml(job.id)}')">View Report</button>` : ''}
                     <button class="btn btn-secondary btn-small" onclick="closeJobModal()">Close</button>
@@ -359,6 +482,12 @@ async function refreshSwarmStatus() {
                     <div class="job-meta-item"><span>Phase:</span><strong>${escapeHtml(job.phase || 'initializing')}</strong></div>
                     <div class="job-meta-item"><span>Replans:</span><strong>${job.replans || 0}</strong></div>
                 </div>
+                <div class="job-meta" style="margin-top:0.5rem;">
+                    <div class="job-meta-item"><span>Attack Attempts:</span><strong>${Number(job.attack_metrics?.attempted || 0)}</strong></div>
+                    <div class="job-meta-item"><span>Success Rate:</span><strong>${Number(job.attack_metrics?.success_rate || 0)}%</strong></div>
+                    <div class="job-meta-item"><span>Stall Warnings:</span><strong>${Number(job.stall_warnings || 0)}</strong></div>
+                </div>
+                ${job.stalled ? `<div class="job-findings" style="margin-top:0.5rem;"><strong>Phase appears stalled - runtime monitor raised warning.</strong></div>` : ''}
             </div>
         `).join('');
     } catch (error) {
@@ -387,6 +516,13 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = String(text);
     return div.innerHTML;
+}
+
+function isBusinessLogicFinding(finding) {
+    if (!finding || typeof finding !== 'object') return false;
+    const family = String(finding.attack_family || '').toLowerCase();
+    const type = String(finding.type || '').toLowerCase();
+    return family === 'business logic' || type.startsWith('business_logic_');
 }
 
 document.addEventListener('DOMContentLoaded', () => {

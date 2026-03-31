@@ -194,6 +194,55 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <h3>Business Logic Insights</h3>
+                        <span class="badge" id="business-logic-count">0</span>
+                    </div>
+                    <div id="business-logic-container" class="jobs-list">
+                        <div class="empty-state">
+                            <p>No business-logic findings yet</p>
+                            <small>Run assessments to populate workflow and access-control insights</small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <h3>Attack Execution Analytics</h3>
+                        <span class="badge" id="attack-analytics-mode">n/a</span>
+                    </div>
+                    <div class="stats-grid" style="margin-bottom: 10px;">
+                        <div class="stat-box">
+                            <div class="stat-content">
+                                <div class="stat-number" id="attack-attempts">0</div>
+                                <div class="stat-label">Attack Attempts</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-content">
+                                <div class="stat-number" id="attack-success-rate">0%</div>
+                                <div class="stat-label">Success Rate</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-content">
+                                <div class="stat-number" id="attack-fallback-used">No</div>
+                                <div class="stat-label">Fallback Used</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-content">
+                                <div class="stat-number" id="attack-avg-exploit-duration">0.00s</div>
+                                <div class="stat-label">Avg Exploit Duration</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="color: var(--text-muted); font-size: 0.9rem;" id="attack-analytics-context">
+                        Waiting for completed swarm assessment telemetry.
+                    </div>
+                </div>
             </section>
 
             <!-- Assessment Tab -->

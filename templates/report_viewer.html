@@ -276,6 +276,24 @@
             word-break: break-word;
         }
 
+        .finding-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .finding-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            border: 1px solid var(--border-color);
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-primary);
+        }
+
         .description-box,
         .remediation-box {
             background: rgba(255, 255, 255, 0.05);
@@ -725,13 +743,24 @@
 
         function findingToHtml(finding) {
             const severity = finding.severity || 'low';
-            const priorityClass = `pri-${finding.severity || 'low'}`;
+            const confidence = Number(finding.confidence_score || 0);
+            const evidenceStrength = String(finding.evidence_strength || 'moderate');
+            const attackFamily = String(finding.attack_family || 'General');
+            const attackVariant = String(finding.attack_variant || 'Uncategorized');
+            const statusText = finding.exploitation_status || finding.status || 'Unknown';
 
             return `
                 <div class="finding ${severity}">
                     <div class="finding-header">
                         <div class="finding-title">${escapeHtml(finding.type)}</div>
                         <span class="severity-badge severity-${severity}">${(severity || 'unknown').toUpperCase()}</span>
+                    </div>
+
+                    <div class="finding-badges">
+                        <span class="finding-badge">Family: ${escapeHtml(attackFamily)}</span>
+                        <span class="finding-badge">Variant: ${escapeHtml(attackVariant)}</span>
+                        <span class="finding-badge">Confidence: ${confidence}%</span>
+                        <span class="finding-badge">Evidence: ${escapeHtml(evidenceStrength)}</span>
                     </div>
 
                     <div class="finding-details">
@@ -745,7 +774,7 @@
                         </div>
                         <div class="finding-detail-item">
                             <div class="detail-label">Status</div>
-                            <div class="detail-value">${escapeHtml(finding.exploitation_status || 'Unknown')}</div>
+                            <div class="detail-value">${escapeHtml(statusText)}</div>
                         </div>
                     </div>
 

@@ -17,6 +17,82 @@ from .base_agent import BaseAgent, AgentCapability, TaskResult
 logger = logging.getLogger(__name__)
 
 
+INVARIANT_TEMPLATES = [
+    {
+        "id": "privileged_routes_require_auth",
+        "name": "Privileged route access control",
+        "category": "access_control",
+        "severity": "high",
+        "routes": ["/admin", "/admin/dashboard", "/management", "/internal"],
+        "success_markers": ["admin", "dashboard", "manage users", "settings"],
+        "negative_markers": ["login", "sign in", "unauthorized", "forbidden"],
+        "finding": {
+            "type": "business_logic_access_control",
+            "status": "Potentially Exposed",
+            "description": "Privileged route appears reachable without explicit authentication challenge"
+        }
+    },
+    {
+        "id": "checkout_completion_requires_previous_steps",
+        "name": "Checkout completion order enforcement",
+        "category": "workflow",
+        "severity": "high",
+        "requires_markers": ["checkout"],
+        "routes": ["/checkout/complete", "/payment/success", "/order/confirmation", "/checkout/finalize"],
+        "success_markers": ["order confirmed", "payment success", "thank you", "confirmation"],
+        "finding": {
+            "type": "business_logic_workflow_bypass",
+            "status": "Potentially Exploitable",
+            "description": "Completion endpoint may be reachable without validated prior checkout steps"
+        }
+    },
+    {
+        "id": "account_routes_require_authentication",
+        "name": "Account route authentication",
+        "category": "authentication",
+        "severity": "medium",
+        "requires_markers": ["authentication"],
+        "routes": ["/account", "/profile", "/user/settings"],
+        "success_markers": ["profile", "account", "settings"],
+        "negative_markers": ["login", "sign in", "session expired", "unauthorized"],
+        "finding": {
+            "type": "business_logic_authentication_gap",
+            "status": "Suspicious Exposure",
+            "description": "Account-related route appears accessible without clear authentication barrier"
+        }
+    },
+    {
+        "id": "approval_routes_require_authorization",
+        "name": "Approval workflow authorization",
+        "category": "workflow",
+        "severity": "high",
+        "routes": ["/approve", "/approval/complete", "/workflow/approve", "/admin/approve"],
+        "success_markers": ["approved", "approval complete", "request approved"],
+        "negative_markers": ["login", "forbidden", "unauthorized"],
+        "finding": {
+            "type": "business_logic_approval_bypass",
+            "status": "Potentially Exploitable",
+            "description": "Approval endpoint may be directly callable without proper role or state validation"
+        }
+    },
+    {
+        "id": "coupon_usage_enforces_limits",
+        "name": "Coupon single-use and validity controls",
+        "category": "commerce",
+        "severity": "medium",
+        "requires_markers": ["discounts"],
+        "routes": ["/coupon/apply", "/promo/apply", "/discount/apply"],
+        "success_markers": ["discount applied", "coupon applied", "promo applied"],
+        "negative_markers": ["invalid coupon", "expired", "limit reached"],
+        "finding": {
+            "type": "business_logic_coupon_abuse",
+            "status": "Potentially Exploitable",
+            "description": "Discount application route may allow coupon abuse through weak state validation"
+        }
+    }
+]
+
+
 class BusinessLogicAgent(BaseAgent):
     """Specialized agent for workflow and business-logic flaw detection."""
 
@@ -62,18 +138,10 @@ class BusinessLogicAgent(BaseAgent):
         }
 
         self.set_progress(0.55, "Testing workflow invariants")
-        vulnerabilities = []
-
-        # Invariant: privileged routes should not be publicly accessible.
-        vulnerabilities.extend(self._check_privileged_route_access(target))
-
-        # Invariant: critical flow completion routes should require prior steps.
-        if workflow_markers["checkout"]:
-            vulnerabilities.extend(self._check_checkout_step_bypass(target))
-
-        # Invariant: account management routes should enforce authentication.
-        if workflow_markers["authentication"]:
-            vulnerabilities.extend(self._check_account_route_exposure(target))
+        template_results = self._run_invariant_templates(target, workflow_markers)
+        vulnerabilities = template_results.get("vulnerabilities", [])
+        templates_tested = template_results.get("templates_tested", [])
+        triggered_templates = template_results.get("triggered_templates", [])
 
         for vuln in vulnerabilities:
             self.add_finding(vuln)
@@ -85,11 +153,8 @@ class BusinessLogicAgent(BaseAgent):
             data={
                 "workflow_markers": workflow_markers,
                 "vulnerabilities": vulnerabilities,
-                "invariants_tested": [
-                    "privileged_routes_require_auth",
-                    "checkout_completion_requires_previous_steps",
-                    "account_routes_require_authentication"
-                ]
+                "invariants_tested": templates_tested,
+                "templates_triggered": triggered_templates
             }
         )
 
@@ -105,84 +170,58 @@ class BusinessLogicAgent(BaseAgent):
             logger.debug(f"BusinessLogicAgent fetch failed for {target}: {e}")
             return {"status_code": 0, "headers": {}, "body": ""}
 
-    def _check_privileged_route_access(self, target: str) -> List[Dict[str, Any]]:
-        findings = []
-        candidates = ["/admin", "/admin/dashboard", "/management", "/internal"]
+    def _run_invariant_templates(self, target: str, workflow_markers: Dict[str, bool]) -> Dict[str, Any]:
+        vulnerabilities: List[Dict[str, Any]] = []
+        templates_tested: List[str] = []
+        triggered_templates: List[str] = []
 
-        for route in candidates:
+        for template in INVARIANT_TEMPLATES:
+            required_markers = template.get("requires_markers", [])
+            if required_markers and not all(workflow_markers.get(marker, False) for marker in required_markers):
+                continue
+
+            templates_tested.append(template["id"])
+            finding = self._execute_template(target, template)
+            if finding:
+                vulnerabilities.append(finding)
+                triggered_templates.append(template["id"])
+
+        return {
+            "vulnerabilities": vulnerabilities,
+            "templates_tested": templates_tested,
+            "triggered_templates": triggered_templates
+        }
+
+    def _execute_template(self, target: str, template: Dict[str, Any]) -> Dict[str, Any]:
+        routes = template.get("routes", [])
+        success_markers = [m.lower() for m in template.get("success_markers", [])]
+        negative_markers = [m.lower() for m in template.get("negative_markers", [])]
+
+        for route in routes:
             url = urljoin(target.rstrip("/") + "/", route.lstrip("/"))
             try:
-                r = requests.get(url, timeout=8, allow_redirects=False)
-                body = (r.text or "").lower()
+                response = requests.get(url, timeout=8, allow_redirects=False)
+                body = (response.text or "").lower()
 
-                # Heuristic: 200 without an auth challenge page is suspicious.
-                if r.status_code == 200 and not any(k in body for k in ["login", "sign in", "unauthorized"]):
-                    findings.append({
-                        "type": "business_logic_access_control",
-                        "severity": "high",
-                        "status": "Potentially Exposed",
+                if response.status_code != 200:
+                    continue
+
+                has_success_marker = any(m in body for m in success_markers) if success_markers else True
+                has_negative_marker = any(m in body for m in negative_markers)
+
+                if has_success_marker and not has_negative_marker:
+                    finding_meta = template.get("finding", {})
+                    return {
+                        "type": finding_meta.get("type", "business_logic_issue"),
+                        "severity": template.get("severity", "medium"),
+                        "status": finding_meta.get("status", "Potentially Exploitable"),
                         "location": url,
-                        "description": "Privileged route appears reachable without explicit authentication challenge",
-                        "evidence": f"HTTP {r.status_code} on privileged endpoint"
-                    })
-                    break
+                        "description": finding_meta.get("description", "Business-logic invariant may be violated"),
+                        "evidence": f"HTTP {response.status_code} on {route} without clear challenge markers",
+                        "invariant_template": template.get("id"),
+                        "invariant_category": template.get("category")
+                    }
             except Exception:
                 continue
 
-        return findings
-
-    def _check_checkout_step_bypass(self, target: str) -> List[Dict[str, Any]]:
-        findings = []
-        candidates = [
-            "/checkout/complete",
-            "/payment/success",
-            "/order/confirmation",
-            "/checkout/finalize"
-        ]
-
-        for route in candidates:
-            url = urljoin(target.rstrip("/") + "/", route.lstrip("/"))
-            try:
-                r = requests.get(url, timeout=8, allow_redirects=False)
-                body = (r.text or "").lower()
-                success_keywords = ["order confirmed", "payment success", "thank you", "confirmation"]
-
-                if r.status_code == 200 and any(k in body for k in success_keywords):
-                    findings.append({
-                        "type": "business_logic_workflow_bypass",
-                        "severity": "high",
-                        "status": "Potentially Exploitable",
-                        "location": url,
-                        "description": "Completion endpoint may be reachable without validated prior checkout steps",
-                        "evidence": f"HTTP {r.status_code} with success markers on direct access"
-                    })
-                    break
-            except Exception:
-                continue
-
-        return findings
-
-    def _check_account_route_exposure(self, target: str) -> List[Dict[str, Any]]:
-        findings = []
-        candidates = ["/account", "/profile", "/user/settings"]
-
-        for route in candidates:
-            url = urljoin(target.rstrip("/") + "/", route.lstrip("/"))
-            try:
-                r = requests.get(url, timeout=8, allow_redirects=False)
-                body = (r.text or "").lower()
-
-                if r.status_code == 200 and not any(k in body for k in ["login", "sign in", "session expired"]):
-                    findings.append({
-                        "type": "business_logic_authentication_gap",
-                        "severity": "medium",
-                        "status": "Suspicious Exposure",
-                        "location": url,
-                        "description": "Account-related route appears accessible without clear authentication barrier",
-                        "evidence": f"HTTP {r.status_code} on account route"
-                    })
-                    break
-            except Exception:
-                continue
-
-        return findings
+        return {}

@@ -107,7 +107,12 @@ ATTACK_TAXONOMY = {
     "ldap_injection": ("Injection", "LDAP Injection"),
     "header_injection": ("Injection", "HTTP Header Injection"),
     "brute_force": ("Authentication", "Credential Brute Force"),
-    "http_basic_auth_brute_force": ("Authentication", "Credential Brute Force")
+    "http_basic_auth_brute_force": ("Authentication", "Credential Brute Force"),
+    "business_logic_access_control": ("Business Logic", "Privilege/Access Workflow"),
+    "business_logic_workflow_bypass": ("Business Logic", "Workflow Step Bypass"),
+    "business_logic_authentication_gap": ("Business Logic", "Authentication State Gap"),
+    "business_logic_approval_bypass": ("Business Logic", "Approval Chain Bypass"),
+    "business_logic_coupon_abuse": ("Business Logic", "Commerce Rule Abuse")
 }
 
 SEVERITY_CONFIDENCE_BASE = {
@@ -150,6 +155,8 @@ def _classify_attack(ftype: str, description: str = ""):
         return ATTACK_TAXONOMY["path_traversal"]
     if "brute" in token or "credential" in desc or "auth" in token:
         return ATTACK_TAXONOMY["brute_force"]
+    if "business_logic" in token or "workflow" in desc or "approval" in desc:
+        return ("Business Logic", "Workflow Integrity")
 
     return ("General", "Uncategorized")
 
@@ -164,6 +171,8 @@ def _score_finding(finding: dict):
 
     evidence_strength = "moderate"
     confidence = base
+    attack_family = str(finding.get("attack_family", "")).lower()
+    finding_type = str(finding.get("type", "")).lower()
 
     if evidence:
         confidence += 6
@@ -172,6 +181,19 @@ def _score_finding(finding: dict):
         evidence_strength = "strong"
     if "not present" in evidence.lower() or "headers" in evidence.lower():
         evidence_strength = "strong"
+
+    # Business-logic findings are usually high-impact but heuristic by nature.
+    # Raise confidence when deterministic template metadata and route evidence exist,
+    # and slightly reduce overconfidence for purely heuristic detections.
+    if attack_family == "business logic" or finding_type.startswith("business_logic_"):
+        confidence += 4
+        if finding.get("invariant_template"):
+            confidence += 5
+            evidence_strength = "strong"
+        if "without clear challenge markers" in evidence.lower():
+            confidence += 3
+        if "potentially" in status.lower() and not finding.get("invariant_template"):
+            confidence -= 4
 
     confidence = max(35, min(99, confidence))
     finding["confidence_score"] = confidence
@@ -395,7 +417,21 @@ def create_assessment():
                 "phase": None,
                 "replans": 0,
                 "agent_count": 0,
-                "status": "not_started"
+                "status": "not_started",
+                "phase_history": [],
+                "phase_durations": {},
+                "agent_timings": {},
+                "attack_metrics": {
+                    "attempted": 0,
+                    "successful": 0,
+                    "failed": 0,
+                    "success_rate": 0.0,
+                    "replan_count": 0,
+                    "fallback_attacks_used": False
+                },
+                "stalled": False,
+                "stall_warnings": 0,
+                "last_phase_change_at": None
             }
         }
         
@@ -1031,16 +1067,30 @@ def run_swarm_assessment_background(job_id, target, target_type):
                 }
 
                 last_phase = None
+                phase_started_at = datetime.now()
+                stall_alert_sent = False
                 while mission.status == 'active':
                     status = c2.get_mission_status(mission.id) or {}
                     phase = status.get('phase', 'running')
+                    reported_progress = status.get('progress')
 
                     job['phase'] = f"Swarm: {phase.replace('_', ' ').title()}"
-                    job['progress'] = phase_progress.get(phase, job.get('progress', 10))
+                    if isinstance(reported_progress, (int, float)) and reported_progress > 0:
+                        job['progress'] = max(int(reported_progress * 100), phase_progress.get(phase, job.get('progress', 10)))
+                    else:
+                        job['progress'] = phase_progress.get(phase, job.get('progress', 10))
                     job['swarm']['phase'] = phase
                     job['swarm']['replans'] = mission.replans
+                    job['swarm']['phase_history'] = status.get('phase_history', [])
+                    job['swarm']['phase_durations'] = status.get('phase_durations', {})
+                    job['swarm']['agent_timings'] = status.get('agent_timings', {})
+                    job['swarm']['attack_metrics'] = status.get('attack_metrics', job['swarm'].get('attack_metrics', {}))
+                    job['swarm']['last_phase_change_at'] = status.get('last_phase_change_at')
 
                     if phase != last_phase:
+                        phase_started_at = datetime.now()
+                        stall_alert_sent = False
+                        job['swarm']['stalled'] = False
                         _emit_visualization_event(
                             EventType.SCAN_PROGRESS,
                             {
@@ -1052,6 +1102,25 @@ def run_swarm_assessment_background(job_id, target, target_type):
                             source="swarm_runner"
                         )
                         last_phase = phase
+
+                    phase_elapsed = (datetime.now() - phase_started_at).total_seconds()
+                    if phase_elapsed > 120 and not stall_alert_sent:
+                        job['swarm']['stalled'] = True
+                        job['swarm']['stall_warnings'] = job['swarm'].get('stall_warnings', 0) + 1
+                        stall_alert_sent = True
+                        _emit_visualization_event(
+                            EventType.SCAN_PROGRESS,
+                            {
+                                "job_id": job_id,
+                                "mission_id": mission.id,
+                                "phase": phase,
+                                "progress": job['progress'],
+                                "stalled": True,
+                                "phase_elapsed_seconds": int(phase_elapsed)
+                            },
+                            source="swarm_runner",
+                            severity="warning"
+                        )
                     await asyncio.sleep(0.5)
 
                 final_status = c2.get_mission_status(mission.id) or {}
@@ -1067,6 +1136,12 @@ def run_swarm_assessment_background(job_id, target, target_type):
                 job['swarm']['status'] = job['status']
                 job['swarm']['phase'] = final_status.get('phase')
                 job['swarm']['replans'] = mission.replans
+                job['swarm']['phase_history'] = final_status.get('phase_history', [])
+                job['swarm']['phase_durations'] = final_status.get('phase_durations', {})
+                job['swarm']['agent_timings'] = final_status.get('agent_timings', {})
+                job['swarm']['attack_metrics'] = final_status.get('attack_metrics', job['swarm'].get('attack_metrics', {}))
+                job['swarm']['last_phase_change_at'] = final_status.get('last_phase_change_at')
+                job['swarm']['stalled'] = False
 
                 attempted_vulns = mission.intel.get("vulnerabilities", []) or []
                 exploited = mission.intel.get("exploitation", []) or []
@@ -1381,7 +1456,11 @@ def agents_status():
                     "status": job.get("status"),
                     "mission_id": job.get("swarm", {}).get("mission_id"),
                     "phase": job.get("swarm", {}).get("phase"),
-                    "replans": job.get("swarm", {}).get("replans", 0)
+                    "replans": job.get("swarm", {}).get("replans", 0),
+                    "stalled": job.get("swarm", {}).get("stalled", False),
+                    "stall_warnings": job.get("swarm", {}).get("stall_warnings", 0),
+                    "attack_metrics": job.get("swarm", {}).get("attack_metrics", {}),
+                    "last_phase_change_at": job.get("swarm", {}).get("last_phase_change_at")
                 }
                 for job in assessment_jobs.values()
                 if job.get("mode") == "swarm"
