@@ -52,6 +52,16 @@
                 </svg>
                 <span>Reports</span>
             </button>
+            <button class="nav-item" data-tab="tools">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M14.7 6.3a1 1 0 010 1.4l-7 7a1 1 0 01-1.4-1.4l7-7a1 1 0 011.4 0z"></path>
+                    <path d="M18 5l1 1"></path>
+                    <path d="M5 18l1 1"></path>
+                    <path d="M8 21l-3-3"></path>
+                    <path d="M19 10l-3-3"></path>
+                </svg>
+                <span>Tools</span>
+            </button>
             
             <div class="nav-divider"></div>
             <span class="nav-section-label">Enterprise</span>
@@ -119,6 +129,57 @@
         </header>
 
         <div class="content-area">
+            <!-- Dashboard Hero -->
+            <section class="dashboard-hero">
+                <div class="hero-copy">
+                    <span class="hero-eyebrow">🔴 RedAgent Security Platform</span>
+                    <h2>Automated Penetration<br>Testing Dashboard</h2>
+                    <p>AI-powered security assessments with multi-agent swarm capabilities, OSINT intelligence gathering, and MITRE ATT&CK mapping.</p>
+                    <div class="hero-actions">
+                        <button class="btn btn-primary" onclick="switchTab('assessment')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style="width:16px;height:16px">
+                                <path d="M5 12h14M12 5l7 7-7 7"></path>
+                            </svg>
+                            New Assessment
+                        </button>
+                        <button class="btn btn-secondary" onclick="switchTab('reports')">View Reports</button>
+                    </div>
+                </div>
+                <div class="hero-panel">
+                    <div class="hero-panel-card">
+                        <div class="hero-panel-label">System Status</div>
+                        <div class="hero-panel-value" id="hero-system-status">Online</div>
+                    </div>
+                    <div class="hero-panel-card">
+                        <div class="hero-panel-label">Active Jobs</div>
+                        <div class="hero-panel-value" id="hero-active-jobs">0</div>
+                    </div>
+                    <div class="hero-panel-card">
+                        <div class="hero-panel-label">Validations</div>
+                        <div class="hero-panel-value" id="hero-validation-count">0</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="status-strip">
+                <div class="status-chip">
+                    <span class="status-chip-label">Ollama</span>
+                    <strong id="status-ollama">Checking</strong>
+                </div>
+                <div class="status-chip">
+                    <span class="status-chip-label">Dashboard</span>
+                    <strong id="status-dashboard">Ready</strong>
+                </div>
+                <div class="status-chip">
+                    <span class="status-chip-label">Validation</span>
+                    <strong id="status-validation">Ready</strong>
+                </div>
+                <div class="status-chip">
+                    <span class="status-chip-label">Reports</span>
+                    <strong id="status-reports">0</strong>
+                </div>
+            </section>
+
             <!-- Dashboard Tab -->
             <section id="dashboard" class="tab-content active">
                 <!-- Stats Grid -->
@@ -228,6 +289,12 @@
                         </div>
                         <div class="stat-box">
                             <div class="stat-content">
+                                <div class="stat-number" id="attack-detection-rate">0%</div>
+                                <div class="stat-label">Detection Rate</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-content">
                                 <div class="stat-number" id="attack-fallback-used">No</div>
                                 <div class="stat-label">Fallback Used</div>
                             </div>
@@ -243,6 +310,59 @@
                         Waiting for completed swarm assessment telemetry.
                     </div>
                 </div>
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <h3>Validation & Remediation</h3>
+                        <span class="badge" id="remediation-count">0</span>
+                    </div>
+                    <div id="remediation-container" class="jobs-list">
+                        <div class="empty-state">
+                            <p>No remediation data yet</p>
+                            <small>Complete an assessment to see verification status and next-step guidance.</small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <h3>Tool Readiness</h3>
+                        <span class="badge" id="tools-ready-count">0/0 ready</span>
+                    </div>
+                    <div class="stats-grid" style="margin-bottom: 10px;">
+                        <div class="stat-box">
+                            <div class="stat-content">
+                                <div class="stat-number" id="tools-total">0</div>
+                                <div class="stat-label">Total Tools</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-content">
+                                <div class="stat-number" id="tools-ready">0</div>
+                                <div class="stat-label">Ready</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-content">
+                                <div class="stat-number" id="tools-degraded">0</div>
+                                <div class="stat-label">Degraded</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-content">
+                                <div class="stat-number" id="tools-unavailable">0</div>
+                                <div class="stat-label">Unavailable</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="tools-health-container" class="jobs-list">
+                        <div class="empty-state">
+                            <p>Loading tool inventory...</p>
+                            <small>Tool status will appear here shortly.</small>
+                        </div>
+                    </div>
+                </div>
+
             </section>
 
             <!-- Assessment Tab -->
@@ -383,14 +503,25 @@
                 <div class="section-card">
                     <div class="section-header">
                         <h3>Assessment Reports</h3>
-                        <button class="btn btn-secondary btn-small" onclick="loadReports()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                <polyline points="23 4 23 10 17 10"></polyline>
-                                <path d="M20.49 15a9 9 0 11-18-8.12"></path>
-                            </svg>
-                            Refresh
-                        </button>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn btn-primary btn-small" onclick="triggerReportImport()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <path d="M12 3v12"></path>
+                                    <polyline points="7 10 12 15 17 10"></polyline>
+                                    <path d="M5 21h14"></path>
+                                </svg>
+                                Import JSON
+                            </button>
+                            <button class="btn btn-secondary btn-small" onclick="loadReports()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <polyline points="23 4 23 10 17 10"></polyline>
+                                    <path d="M20.49 15a9 9 0 11-18-8.12"></path>
+                                </svg>
+                                Refresh
+                            </button>
+                        </div>
                     </div>
+                    <input type="file" id="report-import-input" accept="application/json,.json" style="display:none" />
                     <div id="reports-container" class="reports-grid">
                         <div class="empty-state">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -399,6 +530,133 @@
                             </svg>
                             <p>No reports yet</p>
                             <small>Complete an assessment to generate reports</small>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="tools" class="tab-content">
+                <div class="section-card">
+                    <div class="section-header">
+                        <h3>Tool Inventory & Health</h3>
+                        <button class="btn btn-secondary btn-small" onclick="loadToolsTab()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <polyline points="23 4 23 10 17 10"></polyline>
+                                <path d="M20.49 15a9 9 0 11-18-8.12"></path>
+                            </svg>
+                            Refresh
+                        </button>
+                    </div>
+
+                    <div class="section-card" style="margin-top: 18px;">
+                        <div class="section-header">
+                            <h3>Cyber Range Playground</h3>
+                            <span class="badge" id="cyber-range-badge">0 scenarios</span>
+                        </div>
+                        <p style="color: var(--text-muted); margin-top: 0; margin-bottom: 14px;">
+                            Local-only Docker lab for safe assessment practice. Open it here without leaving the Tools view.
+                        </p>
+                        <div class="stats-grid" style="margin-bottom: 10px;">
+                            <div class="stat-box">
+                                <div class="stat-content">
+                                    <div class="stat-number" id="cyber-range-services">0</div>
+                                    <div class="stat-label">Services</div>
+                                </div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-content">
+                                    <div class="stat-number" id="cyber-range-scenarios">0</div>
+                                    <div class="stat-label">Scenarios</div>
+                                </div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-content">
+                                    <div class="stat-number" id="cyber-range-compose">0</div>
+                                    <div class="stat-label">Compose Files</div>
+                                </div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-content">
+                                    <div class="stat-number" id="cyber-range-dockerfiles">0</div>
+                                    <div class="stat-label">Dockerfiles</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="job-actions" style="margin-bottom: 12px;">
+                            <button class="btn btn-primary btn-small" type="button" onclick="loadCyberRangeInventory()">Refresh Range</button>
+                            <button class="btn btn-secondary btn-small" type="button" onclick="switchTab('dashboard')">View Dashboard Card</button>
+                        </div>
+                        <div id="cyber-range-container" class="jobs-list">
+                            <div class="empty-state">
+                                <p>Loading cyber range inventory...</p>
+                                <small>The range panel will show services and scenarios here.</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom: 24px; padding: 18px; border: 1px solid var(--border-color); border-radius: 14px; background: rgba(255,255,255,0.03);">
+                        <div class="section-header" style="margin-bottom: 12px;">
+                            <h3 style="font-size: 1.1rem; margin: 0;">Run a Tool on a URL</h3>
+                            <span class="badge">Web Targets</span>
+                        </div>
+                        <p style="color: var(--text-muted); margin-bottom: 14px;">Use this launcher for web targets, sandbox fuzzing, cloud posture review, or cyber-range inventory.</p>
+                        <div class="form-row" style="display:grid;grid-template-columns:1.2fr 0.8fr auto;gap:12px;align-items:end;">
+                            <div class="form-group" style="margin: 0;">
+                                <label for="tool-run-url">Target / Range Path</label>
+                                <input type="text" id="tool-run-url" placeholder="https://example.com or cyber_range" autocomplete="off" />
+                            </div>
+                            <div class="form-group" style="margin: 0;">
+                                <label for="tool-run-name">Tool</label>
+                                <select id="tool-run-name">
+                                    <option value="curl">curl</option>
+                                    <option value="nuclei">nuclei</option>
+                                    <option value="fuzzing_harness">fuzzing_harness</option>
+                                    <option value="cloud_posture">cloud_posture</option>
+                                    <option value="cyber_range">cyber_range</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-primary btn-large" type="button" onclick="runUrlTool()">Run Tool</button>
+                        </div>
+                        <div id="tool-run-result" class="job-card" style="margin-top: 16px; display:none;"></div>
+                    </div>
+
+                    <div class="tool-filter-bar" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+                        <button class="btn btn-secondary btn-small tool-filter active" data-tool-filter="all">All</button>
+                        <button class="btn btn-secondary btn-small tool-filter" data-tool-filter="ready">Ready</button>
+                        <button class="btn btn-secondary btn-small tool-filter" data-tool-filter="degraded">Degraded</button>
+                        <button class="btn btn-secondary btn-small tool-filter" data-tool-filter="unavailable">Unavailable</button>
+                    </div>
+
+                    <div class="stats-grid" style="margin-bottom: 10px;">
+                        <div class="stat-box">
+                            <div class="stat-content">
+                                <div class="stat-number" id="tools-tab-total">0</div>
+                                <div class="stat-label">Total</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-content">
+                                <div class="stat-number" id="tools-tab-ready">0</div>
+                                <div class="stat-label">Ready</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-content">
+                                <div class="stat-number" id="tools-tab-degraded">0</div>
+                                <div class="stat-label">Degraded</div>
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-content">
+                                <div class="stat-number" id="tools-tab-unavailable">0</div>
+                                <div class="stat-label">Unavailable</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="tools-tab-container" class="jobs-list">
+                        <div class="empty-state">
+                            <p>Loading tools...</p>
                         </div>
                     </div>
                 </div>
