@@ -14,6 +14,7 @@ from .state import AgentState, ExecutionStatus
 from ..memory.rag import RAGManager
 from ..prompts.system_prompts import get_reasoning_prompt, REACT_FORMAT_INSTRUCTION
 from ..config.config import config
+from ..tools.tool_factory import ToolFactory
 
 logger = logging.getLogger(__name__)
 
@@ -26,19 +27,11 @@ class ReasoningNode:
     4. Preventing hallucination of non-existent tools
     """
     
-    VALID_TOOLS = {
-        "nmap": "Network scanning and port mapping",
-        "sqlmap": "SQL injection testing",
-        "curl": "HTTP requests and API testing",
-        "hydra": "Credential brute-forcing",
-        "analyze_scan": "Parse nmap results for vulnerabilities",
-        "check_memory": "Retrieve relevant past findings from ChromaDB",
-        "formulate_plan": "Break down attack strategy into steps"
-    }
-    
     def __init__(self, llm: BaseLLM, rag_manager: RAGManager):
         self.llm = llm
         self.rag_manager = rag_manager
+        self.tool_factory = ToolFactory()
+        self.valid_tools = self.tool_factory.get_tool_descriptions()
     
     def invoke(self, state: AgentState) -> AgentState:
         """
@@ -63,7 +56,7 @@ class ReasoningNode:
             logger.debug(f"Retrieved {len(relevant_docs)} relevant documents from memory")
         
         # Step 2: Build the prompt
-        system_prompt = get_reasoning_prompt(state, self.VALID_TOOLS)
+        system_prompt = get_reasoning_prompt(state, self.valid_tools)
         
         # Step 3: Call LLM with streaming
         logger.info("[Reasoning] Calling LLM...")
@@ -108,12 +101,12 @@ class ReasoningNode:
         state["parsed_action_input"] = action_input
         
         # Step 5: Validate action
-        if action not in self.VALID_TOOLS:
-            logger.error(f"Invalid action: {action}. Valid tools: {list(self.VALID_TOOLS.keys())}")
+        if action not in self.valid_tools:
+            logger.error(f"Invalid action: {action}. Valid tools: {list(self.valid_tools.keys())}")
             state["errors"].append({
                 "type": "validation_error",
                 "message": f"Attempted to use non-existent tool: {action}",
-                "valid_tools": list(self.VALID_TOOLS.keys()),
+                "valid_tools": list(self.valid_tools.keys()),
                 "timestamp": datetime.now().isoformat()
             })
             

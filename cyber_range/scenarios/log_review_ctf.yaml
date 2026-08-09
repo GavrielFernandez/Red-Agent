@@ -1,0 +1,20 @@
+name: log-review-ctf
+version: 1
+objective: Practice log triage, detection, and report writing against a local training target.
+network: redagent-range
+services:
+  - name: range-web
+    type: landing-page
+    host: range-web
+    port: 8080
+    exposed_port: 8080
+    purpose: Surface for routine observation and event correlation
+  - name: range-login
+    type: auth-workflow
+    host: range-login
+    port: 8080
+    exposed_port: 8081
+    purpose: Authenticated access review and logging validation
+notes:
+  - Inspect service metadata and emitted responses.
+  - Build a concise incident report from local evidence only.

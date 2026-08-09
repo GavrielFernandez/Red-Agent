@@ -1,0 +1,31 @@
+id: redagent-missing-security-headers
+info:
+  author: RedAgent
+  description: Detects missing security headers
+  name: Missing Security Headers
+  severity: info
+  tags:
+  - misconfig
+  - headers
+  - redagent
+requests:
+- matchers:
+  - negative: true
+    part: header
+    regex:
+    - (?i)x-frame-options
+    type: regex
+  - negative: true
+    part: header
+    regex:
+    - (?i)content-security-policy
+    type: regex
+  - negative: true
+    part: header
+    regex:
+    - (?i)strict-transport-security
+    type: regex
+  matchers-condition: or
+  method: GET
+  path:
+  - /

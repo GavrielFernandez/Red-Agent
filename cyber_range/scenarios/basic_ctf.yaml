@@ -1,0 +1,31 @@
+name: basic-ctf-range
+version: 2
+objective: Validate safe recon, fuzzing, auth review, and reporting workflows inside a local Docker sandbox.
+network: redagent-range
+services:
+  - name: range-web
+    type: landing-page
+    host: range-web
+    port: 8080
+    exposed_port: 8080
+    purpose: Briefing and environmental reconnaissance
+  - name: range-login
+    type: auth-workflow
+    host: range-login
+    port: 8080
+    exposed_port: 8081
+    purpose: Practice authentication review and session inspection
+  - name: range-api
+    type: json-api
+    host: range-api
+    port: 8080
+    exposed_port: 8082
+    purpose: Practice safe API inspection and validation
+flags:
+  - range{web_landings_are_for_training_only}
+  - range{local_credentials_only}
+  - range{api_surface_for_safe_validation}
+notes:
+  - The range is isolated on a private Docker bridge network.
+  - All credentials and tokens are local training values.
+  - No external services are contacted by default.

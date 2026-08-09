@@ -1,0 +1,23 @@
+id: redagent-api-security
+info:
+  author: RedAgent
+  description: Checks for common API security issues
+  name: API Security Check
+  severity: medium
+  tags:
+  - api
+  - security
+  - redagent
+requests:
+- matchers:
+  - status:
+    - 200
+    type: status
+  method: GET
+  path:
+  - /api/
+  - /api/v1/
+  - /api/v2/
+  - /swagger.json
+  - /openapi.json
+  - /api-docs

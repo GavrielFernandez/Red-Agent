@@ -1,0 +1,22 @@
+id: redagent-ssrf-detection
+info:
+  author: RedAgent
+  description: Detects server-side request forgery vulnerabilities
+  name: SSRF Detection
+  severity: high
+  tags:
+  - ssrf
+  - redagent
+requests:
+- matchers:
+  - type: word
+    words:
+    - localhost
+    - 127.0.0.1
+    - meta-data
+  matchers-condition: or
+  method: GET
+  path:
+  - /?url=http://127.0.0.1
+  - /?fetch=http://localhost
+  - /?redirect=http://169.254.169.254

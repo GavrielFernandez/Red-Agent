@@ -1,0 +1,48 @@
+version: '3.9'
+
+services:
+  range-web:
+    build:
+      context: ./services/web_challenge
+    container_name: redagent-range-web
+    environment:
+      RANGE_NAME: web-challenge
+      RANGE_FLAG: range{web_landings_are_for_training_only}
+    ports:
+      - "8080:8080"
+    networks:
+      - redagent-range
+    restart: unless-stopped
+
+  range-login:
+    build:
+      context: ./services/login_challenge
+    container_name: redagent-range-login
+    environment:
+      RANGE_NAME: login-challenge
+      RANGE_USER: lab-admin
+      RANGE_PASS: lab-ranger
+      RANGE_FLAG: range{local_credentials_only}
+    ports:
+      - "8081:8080"
+    networks:
+      - redagent-range
+    restart: unless-stopped
+
+  range-api:
+    build:
+      context: ./services/api_challenge
+    container_name: redagent-range-api
+    environment:
+      RANGE_NAME: api-challenge
+      RANGE_TOKEN: range-api-token
+      RANGE_FLAG: range{api_surface_for_safe_validation}
+    ports:
+      - "8082:8080"
+    networks:
+      - redagent-range
+    restart: unless-stopped
+
+networks:
+  redagent-range:
+    driver: bridge

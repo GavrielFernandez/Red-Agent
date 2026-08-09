@@ -1,0 +1,23 @@
+id: redagent-xss-detection
+info:
+  author: RedAgent
+  description: Detects potential cross-site scripting vulnerabilities
+  name: XSS Detection
+  severity: high
+  tags:
+  - xss
+  - injection
+  - redagent
+requests:
+- matchers:
+  - part: body
+    type: word
+    words:
+    - <script>alert(1)</script>
+    - <img src=x onerror=alert(1)>
+    - <svg/onload=alert(1)>
+  method: GET
+  path:
+  - /?q=<script>alert(1)</script>
+  - /?search=<img src=x onerror=alert(1)>
+  - /?name=<svg/onload=alert(1)>

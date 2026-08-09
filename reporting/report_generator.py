@@ -20,6 +20,9 @@ class ReportGenerator:
         """
         Generate report as a dictionary (can be converted to PDF, JSON, etc.)
         """
+
+        findings = self._generate_findings(state)
+        validation = state.get("validation", {}) or {}
         
         report = {
             "metadata": {
@@ -27,12 +30,18 @@ class ReportGenerator:
                 "date": self.timestamp.isoformat(),
                 "target": state.get("target"),
                 "target_type": state.get("target_type"),
+                "mode": state.get("mode", "classic"),
+                "llm_model": state.get("llm_model", "unknown"),
+                "report_version": "2.0",
             },
             "executive_summary": self._generate_summary(state),
-            "findings": self._generate_findings(state),
+            "findings": findings,
+            "assessment_phases": self._generate_assessment_phases(state),
             "methodologies": self._generate_methodology(state),
             "statistics": self._generate_statistics(state),
             "recommendations": self._generate_recommendations(state),
+            "remediation_plan": self._generate_remediation_plan(findings),
+            "validation": validation,
             "appendix": self._generate_appendix(state),
         }
         
@@ -40,10 +49,10 @@ class ReportGenerator:
     
     def _generate_summary(self, state: dict) -> Dict[str, Any]:
         """Generate executive summary"""
-        
-        vuln_count = len(state["vulnerabilities"])
-        critical_count = len([v for v in state["vulnerabilities"] if v["severity"] == "critical"])
-        high_count = len([v for v in state["vulnerabilities"] if v["severity"] == "high"])
+        vulnerabilities = state.get("vulnerabilities", []) or []
+        vuln_count = len(vulnerabilities)
+        critical_count = len([v for v in vulnerabilities if str(v.get("severity", "")).lower() == "critical"])
+        high_count = len([v for v in vulnerabilities if str(v.get("severity", "")).lower() == "high"])
         
         risk_level = "CRITICAL" if critical_count > 0 else "HIGH" if high_count > 0 else "MEDIUM"
         
@@ -52,7 +61,7 @@ class ReportGenerator:
             "vulnerabilities_found": vuln_count,
             "critical_vulnerabilities": critical_count,
             "high_vulnerabilities": high_count,
-            "services_tested": list(state["scanned_ports"].values()),
+            "services_tested": list((state.get("scanned_ports") or {}).values()),
             "summary_text": f"Penetration test of {state['target']} identified {vuln_count} vulnerabilities "
                            f"({critical_count} critical, {high_count} high). "
                            f"Risk level: {risk_level}"
@@ -63,16 +72,22 @@ class ReportGenerator:
         
         findings = []
         
-        for vuln in state["vulnerabilities"]:
+        for vuln in state.get("vulnerabilities", []):
+            severity = str(vuln.get("severity", "medium")).lower()
             finding = {
                 "id": vuln.get("vulnerability_id", "N/A"),
-                "type": vuln["type"],
-                "severity": vuln["severity"],
-                "location": vuln["location"],
-                "description": vuln["description"],
-                "evidence": vuln["evidence"],
-                "exploitation_status": vuln["exploitation_status"],
-                "remediation": self._get_remediation(vuln["type"])
+                "type": vuln.get("type", "unknown"),
+                "severity": severity,
+                "location": vuln.get("location", "unknown"),
+                "description": vuln.get("description", ""),
+                "evidence": vuln.get("evidence", ""),
+                "exploitation_status": vuln.get("exploitation_status", "unknown"),
+                "confidence_score": self._derive_confidence(vuln),
+                "evidence_strength": vuln.get("evidence_strength") or self._derive_evidence_strength(vuln),
+                "validation": vuln.get("validation"),
+                "attack_family": vuln.get("attack_family"),
+                "attack_variant": vuln.get("attack_variant"),
+                "remediation": self._get_remediation(vuln.get("type", "unknown")),
             }
             findings.append(finding)
         
@@ -81,6 +96,59 @@ class ReportGenerator:
         findings.sort(key=lambda x: severity_order.get(x["severity"], 999))
         
         return findings
+
+    def _derive_confidence(self, vuln: Dict[str, Any]) -> int:
+        """Fallback confidence score when the source finding has none."""
+
+        raw = vuln.get("confidence_score")
+        try:
+            if raw is not None:
+                return max(0, min(100, int(float(raw))))
+        except (TypeError, ValueError):
+            pass
+
+        validation = vuln.get("validation") or {}
+        if isinstance(validation, dict):
+            if validation.get("confirmed") is True:
+                return 95
+            raw_validation_conf = validation.get("confidence")
+            try:
+                if raw_validation_conf is not None:
+                    val = float(raw_validation_conf)
+                    if val <= 1:
+                        val *= 100
+                    return max(0, min(100, int(round(val))))
+            except (TypeError, ValueError):
+                pass
+
+        status = str(vuln.get("exploitation_status", vuln.get("status", ""))).lower()
+        severity = str(vuln.get("severity", "medium")).lower()
+
+        if status == "confirmed":
+            return 95
+        if status == "potential":
+            return 65
+        if status in {"bypass_confirmed", "executed"}:
+            return 90
+        if severity == "critical":
+            return 85
+        if severity == "high":
+            return 75
+        if severity == "medium":
+            return 55
+        if severity == "low":
+            return 35
+        return 25
+
+    def _derive_evidence_strength(self, vuln: Dict[str, Any]) -> str:
+        """Provide a readable evidence-strength label when missing."""
+
+        status = str(vuln.get("exploitation_status", vuln.get("status", ""))).lower()
+        if status == "confirmed":
+            return "strong"
+        if status == "potential":
+            return "moderate"
+        return "moderate"
     
     def _generate_methodology(self, state: dict) -> Dict[str, Any]:
         """Document testing methodology"""
@@ -95,25 +163,59 @@ class ReportGenerator:
             ],
             "tools_used": ["Nmap", "SQLmap", "Curl", "Hydra"],
             "testing_duration_seconds": sum(
-                e.get("execution_time", 0) for e in state["execution_history"]
+                e.get("execution_time", 0) for e in state.get("execution_history", [])
             ),
-            "total_scans": len(state["execution_history"])
+            "total_scans": len(state.get("execution_history", []))
         }
+
+    def _generate_assessment_phases(self, state: dict) -> List[Dict[str, Any]]:
+        """Create a compact phase summary for dashboard and HTML reports."""
+
+        vulnerabilities = state.get("vulnerabilities", []) or []
+        execution_history = state.get("execution_history", []) or []
+        validation = state.get("validation", {}) or {}
+
+        return [
+            {
+                "phase": "reconnaissance",
+                "type": "Discovery",
+                "content": f"Identified {len((state.get('scanned_ports') or {}))} scanned services and {len(state.get('reflections', []))} reasoning loops.",
+                "status": "completed" if execution_history else "pending",
+            },
+            {
+                "phase": "vulnerability_analysis",
+                "type": "Triage",
+                "content": f"Validated {len(vulnerabilities)} findings across the active assessment surface.",
+                "status": "completed" if vulnerabilities else "pending",
+            },
+            {
+                "phase": "exploitation_planning",
+                "type": "Planning",
+                "content": f"Execution history contains {len(execution_history)} tool actions and retry decisions.",
+                "status": "completed" if execution_history else "pending",
+            },
+            {
+                "phase": "impact_assessment",
+                "type": "Reporting",
+                "content": f"Risk level {self._generate_summary(state)['risk_level']} with {validation.get('confirmed', 0)} confirmed validations.",
+                "status": "completed" if state.get("vulnerabilities") else "pending",
+            },
+        ]
     
     def _generate_statistics(self, state: dict) -> Dict[str, Any]:
         """Generate testing statistics"""
         
         return {
-            "total_loops": state["loop_count"],
-            "total_executions": state["total_executions"],
-            "successful_executions": len([e for e in state["execution_history"] 
+            "total_loops": state.get("loop_count", 0),
+            "total_executions": state.get("total_executions", len(state.get("execution_history", []))),
+            "successful_executions": len([e for e in state.get("execution_history", []) 
                                          if e["return_code"] == 0]),
-            "failed_executions": len([e for e in state["execution_history"] 
+            "failed_executions": len([e for e in state.get("execution_history", []) 
                                      if e["return_code"] != 0]),
-            "reflections_performed": len(state["reflections"]),
+            "reflections_performed": len(state.get("reflections", [])),
             "average_reflection_confidence": (
-                sum(r["confidence"] for r in state["reflections"]) / len(state["reflections"])
-                if state["reflections"] else 0
+                sum(r.get("confidence", 0) for r in state.get("reflections", [])) / len(state.get("reflections", []))
+                if state.get("reflections") else 0
             )
         }
     
@@ -121,9 +223,10 @@ class ReportGenerator:
         """Generate remediation recommendations"""
         
         recommendations = []
+        vulnerabilities = state.get("vulnerabilities", []) or []
         
         # Critical vulnerabilities need immediate action
-        critical = [v for v in state["vulnerabilities"] if v["severity"] == "critical"]
+        critical = [v for v in vulnerabilities if str(v.get("severity", "")).lower() == "critical"]
         if critical:
             recommendations.append({
                 "priority": "CRITICAL",
@@ -132,7 +235,7 @@ class ReportGenerator:
             })
         
         # SQL injection
-        if any(v["type"] == "sql_injection" for v in state["vulnerabilities"]):
+        if any(str(v.get("type", "")).lower() == "sql_injection" for v in vulnerabilities):
             recommendations.append({
                 "priority": "HIGH",
                 "action": "Implement parameterized queries and input validation",
@@ -140,7 +243,7 @@ class ReportGenerator:
             })
         
         # Weak credentials
-        if any(v["type"] == "weak_credentials" for v in state["vulnerabilities"]):
+        if any(str(v.get("type", "")).lower() == "weak_credentials" for v in vulnerabilities):
             recommendations.append({
                 "priority": "HIGH",
                 "action": "Enforce strong password policies and multi-factor authentication",
@@ -167,6 +270,25 @@ class ReportGenerator:
         ])
         
         return recommendations
+
+    def _generate_remediation_plan(self, findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert findings into a remediation-first action plan."""
+
+        plan = []
+        for finding in findings:
+            severity = str(finding.get("severity", "medium")).lower()
+            plan.append({
+                "priority": severity.upper(),
+                "finding_type": finding.get("type", "unknown"),
+                "location": finding.get("location", "unknown"),
+                "remediation": finding.get("remediation", "Address this vulnerability per security best practices"),
+                "verification": "Re-run remediation verification after the fix is deployed.",
+                "status": finding.get("validation", {}).get("confirmed", False) and "confirmed" or "unconfirmed",
+            })
+
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        plan.sort(key=lambda item: severity_order.get(item["priority"].lower(), 999))
+        return plan
     
     def _generate_appendix(self, state: dict) -> Dict[str, Any]:
         """Generate technical appendix with execution details"""
@@ -174,15 +296,16 @@ class ReportGenerator:
         return {
             "execution_log": [
                 {
-                    "tool": e["tool_name"],
-                    "status": e["status"].value,
-                    "time": e["execution_time"],
-                    "args": str(e["tool_args"])
+                    "tool": e.get("tool_name"),
+                    "status": getattr(e.get("status"), "value", e.get("status")),
+                    "time": e.get("execution_time", 0),
+                    "args": str(e.get("tool_args", {}))
                 }
-                for e in state["execution_history"][:20]  # Last 20 executions
+                for e in state.get("execution_history", [])[:20]  # Last 20 executions
             ],
-            "errors_encountered": state["errors"],
-            "warnings": state["warnings"]
+            "errors_encountered": state.get("errors", []),
+            "warnings": state.get("warnings", []),
+            "validation_summary": state.get("validation", {}),
         }
     
     def _get_remediation(self, vulnerability_type: str) -> str:
@@ -196,4 +319,4 @@ class ReportGenerator:
             "authentication_bypass": "Implement proper session management and access controls",
         }
         
-        return remediations.get(vulnerability_type, "Address this vulnerability per security best practices")
+        return remediations.get(str(vulnerability_type).lower(), "Address this vulnerability per security best practices")

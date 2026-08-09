@@ -8,6 +8,11 @@
     <!-- Three.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
     
     <style>
         * {
@@ -107,6 +112,78 @@
             grid-template-columns: 1fr 1fr;
             gap: 8px;
             margin-top: 8px;
+        }
+
+        .command-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .command-grid button,
+        .command-row button,
+        .path-row button {
+            background: linear-gradient(135deg, #14304f, #1f4d74);
+            color: #d8ebff;
+            border: 1px solid #35597d;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 0.78rem;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .command-grid button:hover,
+        .command-row button:hover,
+        .path-row button:hover {
+            filter: brightness(1.1);
+        }
+
+        .command-row,
+        .path-row,
+        .quality-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .path-row input,
+        .replay-slider,
+        #node-search {
+            width: 100%;
+            background: #0c131d;
+            color: #e0e0e0;
+            border: 1px solid #27384d;
+            border-radius: 8px;
+            padding: 8px;
+            font-size: 0.82rem;
+        }
+
+        .quality-badge {
+            margin-left: auto;
+            font-size: 0.75rem;
+            color: #9dc5eb;
+            border: 1px solid #3e5f82;
+            border-radius: 999px;
+            padding: 2px 8px;
+        }
+
+        .mode-badge {
+            margin-top: 8px;
+            display: inline-block;
+            font-size: 0.74rem;
+            color: #ffc983;
+            border: 1px solid #6d5838;
+            border-radius: 999px;
+            padding: 3px 9px;
+            background: rgba(120, 78, 19, 0.2);
+        }
+
+        .subtle-label {
+            margin-top: 6px;
+            color: #8fa4bb;
+            font-size: 0.76rem;
         }
 
         .filter-item {
@@ -516,6 +593,42 @@
             </div>
 
             <div class="sidebar-section">
+                <h3>Command Deck</h3>
+                <div class="command-grid">
+                    <button type="button" data-camera="global">Global View</button>
+                    <button type="button" data-camera="lateral">Layer View</button>
+                    <button type="button" data-camera="overhead">Top View</button>
+                    <button type="button" data-camera="incident">Incident View</button>
+                </div>
+                <div class="command-row">
+                    <input id="node-search" type="text" placeholder="Search node label/id">
+                    <button id="focus-node-button" type="button">Focus</button>
+                </div>
+                <div class="path-row">
+                    <input id="path-source" type="text" placeholder="Path source node id">
+                    <input id="path-target" type="text" placeholder="Path target node id">
+                </div>
+                <div class="path-row">
+                    <button id="toggle-path-mode" type="button">Enable Path Mode</button>
+                    <button id="apply-path-mode" type="button">Apply Path</button>
+                </div>
+                <div class="quality-row">
+                    <button id="toggle-labels" type="button">Toggle Labels</button>
+                    <span class="quality-badge" id="quality-badge">Quality: high</span>
+                </div>
+                <div class="command-row">
+                    <button id="export-mission" type="button">Export Mission Snapshot</button>
+                    <span class="mode-badge" id="render-mode-badge">Render: mesh</span>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Timeline Replay</h3>
+                <input id="replay-slider" class="replay-slider" type="range" min="0" max="0" value="0" step="1">
+                <div class="subtle-label" id="replay-label">Live stream</div>
+            </div>
+
+            <div class="sidebar-section">
                 <h3>Live Activity</h3>
                 <div class="timeline" id="activity-timeline">
                     <div class="timeline-item">
@@ -544,6 +657,70 @@
         const dashboard = new MetricsDashboard('metrics-container');
         let selectedJobId = new URLSearchParams(window.location.search).get('job') || '';
         const enabledTypes = new Set(['target', 'host', 'service', 'vulnerability', 'exploit', 'data']);
+        const snapshots = [];
+        let labelsVisible = true;
+        let pathModeEnabled = false;
+        let latestMetrics = {};
+
+        function downloadFile(filename, content, type) {
+            const blob = new Blob([content], { type });
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = filename;
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            URL.revokeObjectURL(url);
+        }
+
+        function updateRenderModeBadge(enabled, count) {
+            const badge = document.getElementById('render-mode-badge');
+            if (!badge) return;
+            badge.textContent = enabled
+                ? `Render: instanced (${count})`
+                : `Render: mesh (${count})`;
+        }
+
+        function updateQualityBadge(level) {
+            const badge = document.getElementById('quality-badge');
+            if (badge) {
+                badge.textContent = `Quality: ${level}`;
+            }
+        }
+
+        document.getElementById('attack-graph').addEventListener('qualityChange', (event) => {
+            updateQualityBadge(event?.detail?.level || 'high');
+        });
+
+        document.getElementById('attack-graph').addEventListener('instancedMode', (event) => {
+            updateRenderModeBadge(Boolean(event?.detail?.enabled), Number(event?.detail?.count || 0));
+        });
+
+        updateQualityBadge('high');
+        updateRenderModeBadge(false, 0);
+
+        function pushSnapshot(graph, metrics) {
+            snapshots.push({
+                timestamp: Date.now(),
+                graph,
+                metrics,
+            });
+
+            if (snapshots.length > 180) {
+                snapshots.shift();
+            }
+
+            const slider = document.getElementById('replay-slider');
+            if (!slider) return;
+            slider.max = String(Math.max(snapshots.length - 1, 0));
+            slider.value = String(snapshots.length - 1);
+
+            const label = document.getElementById('replay-label');
+            if (label) {
+                label.textContent = 'Live stream';
+            }
+        }
 
         function applyNodeTypeFilters(graph) {
             const nodes = (graph.nodes || []).filter(n => enabledTypes.has(n.type));
@@ -580,6 +757,7 @@
                 }
                 window.history.replaceState({}, '', url.toString());
                 viz.clear();
+                snapshots.length = 0;
                 refreshVisualizationState();
             });
         }
@@ -665,11 +843,12 @@
                 }
                 const data = await response.json();
                 const filteredGraph = applyNodeTypeFilters(data.graph || { nodes: [], edges: [] });
-                viz.clear();
                 viz.updateFromState(filteredGraph);
                 dashboard.update(data.metrics || {});
                 updateTimeline(data.metrics || {});
                 updateHeaderStatus(data.metrics || {});
+                pushSnapshot(filteredGraph, data.metrics || {});
+                latestMetrics = data.metrics || {};
             } catch (error) {
                 console.error('Visualization refresh error:', error);
             }
@@ -677,6 +856,130 @@
 
         refreshVisualizationState();
         setInterval(refreshVisualizationState, 1500);
+
+        document.querySelectorAll('button[data-camera]').forEach((button) => {
+            button.addEventListener('click', () => {
+                viz.setCameraPreset(button.getAttribute('data-camera'));
+            });
+        });
+
+        const nodeSearch = document.getElementById('node-search');
+        const focusNodeButton = document.getElementById('focus-node-button');
+        if (focusNodeButton) {
+            focusNodeButton.addEventListener('click', () => {
+                const query = String(nodeSearch?.value || '').trim().toLowerCase();
+                if (!query) return;
+
+                let matchedId = '';
+                viz.nodes.forEach((node, nodeId) => {
+                    if (matchedId) return;
+                    const label = String(node.label || '').toLowerCase();
+                    if (nodeId.toLowerCase().includes(query) || label.includes(query)) {
+                        matchedId = nodeId;
+                    }
+                });
+
+                if (matchedId) {
+                    viz.focusOnNode(matchedId);
+                }
+            });
+        }
+
+        const pathSourceInput = document.getElementById('path-source');
+        const pathTargetInput = document.getElementById('path-target');
+        const togglePathButton = document.getElementById('toggle-path-mode');
+        const applyPathButton = document.getElementById('apply-path-mode');
+
+        if (togglePathButton) {
+            togglePathButton.addEventListener('click', () => {
+                pathModeEnabled = !pathModeEnabled;
+                viz.setPathMode(pathModeEnabled);
+                togglePathButton.textContent = pathModeEnabled ? 'Disable Path Mode' : 'Enable Path Mode';
+            });
+        }
+
+        if (applyPathButton) {
+            applyPathButton.addEventListener('click', () => {
+                viz.setPathEndpoints(pathSourceInput?.value || '', pathTargetInput?.value || '');
+                viz.applyPathHighlight();
+            });
+        }
+
+        const toggleLabels = document.getElementById('toggle-labels');
+        if (toggleLabels) {
+            toggleLabels.addEventListener('click', () => {
+                labelsVisible = !labelsVisible;
+                viz.setLabelVisibility(labelsVisible);
+                toggleLabels.textContent = labelsVisible ? 'Hide Labels' : 'Show Labels';
+            });
+            toggleLabels.textContent = 'Hide Labels';
+        }
+
+        const replaySlider = document.getElementById('replay-slider');
+        if (replaySlider) {
+            replaySlider.addEventListener('input', () => {
+                const index = Number(replaySlider.value || 0);
+                if (!snapshots[index]) return;
+
+                const frame = snapshots[index];
+                viz.updateFromState(frame.graph || { nodes: [], edges: [] });
+                dashboard.update(frame.metrics || {});
+                updateTimeline(frame.metrics || {});
+                updateHeaderStatus(frame.metrics || {});
+                latestMetrics = frame.metrics || {};
+
+                const label = document.getElementById('replay-label');
+                if (label) {
+                    const atLive = index === snapshots.length - 1;
+                    label.textContent = atLive
+                        ? 'Live stream'
+                        : `Replay: ${new Date(frame.timestamp).toLocaleTimeString()}`;
+                }
+            });
+        }
+
+        const exportButton = document.getElementById('export-mission');
+        if (exportButton) {
+            exportButton.addEventListener('click', () => {
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const graphState = viz.getGraphState();
+                const imageDataUrl = viz.captureCanvasDataUrl();
+
+                if (imageDataUrl) {
+                    const pngPayload = imageDataUrl.split(',')[1];
+                    const binary = atob(pngPayload);
+                    const bytes = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i++) {
+                        bytes[i] = binary.charCodeAt(i);
+                    }
+                    downloadFile(`mission_snapshot_${timestamp}.png`, bytes, 'image/png');
+                }
+
+                const snapshotData = {
+                    generated_at: new Date().toISOString(),
+                    quality: viz.qualityLevel,
+                    instanced_mode: viz.instancedMode,
+                    path_mode: {
+                        enabled: pathModeEnabled,
+                        source: document.getElementById('path-source')?.value || '',
+                        target: document.getElementById('path-target')?.value || '',
+                    },
+                    graph: graphState,
+                    metrics: latestMetrics,
+                    timeline: snapshots.slice(-20).map(s => ({
+                        timestamp: s.timestamp,
+                        node_count: (s.graph?.nodes || []).length,
+                        edge_count: (s.graph?.edges || []).length,
+                    })),
+                };
+
+                downloadFile(
+                    `mission_snapshot_${timestamp}.json`,
+                    JSON.stringify(snapshotData, null, 2),
+                    'application/json'
+                );
+            });
+        }
         
         // Handle node clicks
         document.getElementById('attack-graph').addEventListener('nodeClick', (e) => {
@@ -687,6 +990,17 @@
             document.getElementById('node-type').textContent = node.type;
             document.getElementById('node-status').textContent = node.status;
             document.getElementById('node-severity').textContent = node.severity;
+
+            if (pathSourceInput && pathTargetInput) {
+                if (!pathSourceInput.value) {
+                    pathSourceInput.value = node.id;
+                } else if (!pathTargetInput.value) {
+                    pathTargetInput.value = node.id;
+                } else {
+                    pathSourceInput.value = pathTargetInput.value;
+                    pathTargetInput.value = node.id;
+                }
+            }
         });
         
         // Update time

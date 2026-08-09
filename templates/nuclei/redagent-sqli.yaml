@@ -1,0 +1,33 @@
+id: redagent-sqli-detection
+info:
+  author: RedAgent
+  description: Detects potential SQL injection vulnerabilities
+  name: SQL Injection Detection
+  severity: critical
+  tags:
+  - sqli
+  - injection
+  - redagent
+requests:
+- matchers:
+  - type: word
+    words:
+    - SQL syntax
+    - mysql_fetch
+    - ORA-
+    - PostgreSQL
+    - SQLITE_ERROR
+    - Microsoft SQL
+    - syntax error
+  - regex:
+    - (?i)you have an error in your sql syntax
+    - (?i)unclosed quotation mark
+    - (?i)quoted string not properly terminated
+    type: regex
+  matchers-condition: or
+  method: GET
+  path:
+  - /?id=1'
+  - /?id=1"
+  - /?id=1 AND 1=1
+  - /?search=test' OR '1'='1

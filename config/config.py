@@ -48,6 +48,9 @@ class ToolConfig:
     curl_path: str = os.getenv("REDAGENT_CURL_PATH", "curl")
     hydra_path: str = os.getenv("REDAGENT_HYDRA_PATH", "hydra")
 
+    # Plugin loading (semicolon-separated absolute or relative directories)
+    plugin_paths: str = os.getenv("REDAGENT_TOOL_PLUGIN_PATHS", "")
+
 # ============================================================================
 # Memory Configuration
 # ============================================================================
@@ -215,23 +218,7 @@ def print_config():
     print(f"  Log Directory: {config.logging.log_dir}")
     print("="*70)
 
-class RedAgentConfig:
-    """Master configuration for The Red Agent"""
-    
-    def __init__(self):
-        self.llm = LLMConfig()
-        self.tools = ToolConfig()
-        self.memory = MemoryConfig()
-        self.agent = AgentConfig()
-    
-    def to_dict(self):
-        """Convert to dictionary for logging/debugging"""
-        return {
-            "llm": self.llm.__dict__,
-            "tools": self.tools.__dict__,
-            "memory": self.memory.__dict__,
-            "agent": self.agent.__dict__,
-        }
+class RedAgentConfig(Config):
+    """Backward-compatible alias for the canonical Config dataclass."""
 
-# Global config instance
-config = RedAgentConfig()
+    pass

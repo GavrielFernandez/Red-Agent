@@ -1,0 +1,21 @@
+name: ssrf-practice-ctf
+version: 1
+objective: Practice safe SSRF-oriented discovery and report writing inside a local Docker sandbox.
+network: redagent-range
+services:
+  - name: range-web
+    type: landing-page
+    host: range-web
+    port: 8080
+    exposed_port: 8080
+    purpose: Reference page used for controlled request validation
+  - name: range-api
+    type: json-api
+    host: range-api
+    port: 8080
+    exposed_port: 8082
+    purpose: Practice endpoint mapping and callback handling
+notes:
+  - Keep all requests inside the local training network.
+  - Treat the scenario as a report-writing and validation exercise only.
+  - Do not attempt any interaction outside the sandbox.

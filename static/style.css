@@ -49,7 +49,7 @@
     --header-height: 70px;
     
     /* Typography */
-    --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+    --font-family: 'Segoe UI Variable', 'Bahnschrift', 'Aptos', 'Segoe UI', sans-serif;
     --font-mono: 'Fira Code', 'Courier New', monospace;
     
     /* Shadows */
@@ -74,7 +74,10 @@ html {
 
 body {
     font-family: var(--font-family);
-    background: linear-gradient(135deg, var(--bg-tertiary) 0%, var(--bg-primary) 100%);
+    background:
+        radial-gradient(circle at top left, rgba(220, 20, 60, 0.18), transparent 26%),
+        radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 24%),
+        linear-gradient(135deg, var(--bg-tertiary) 0%, var(--bg-primary) 100%);
     color: var(--text-primary);
     line-height: 1.6;
     overflow-x: hidden;
@@ -97,6 +100,18 @@ body {
     grid-template-columns: var(--sidebar-width) 1fr;
     grid-template-rows: 1fr;
     min-height: 100vh;
+    position: relative;
+}
+
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image: linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    background-size: 48px 48px;
+    mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 0.5), transparent 75%);
+    opacity: 0.35;
 }
 
 .sidebar {
@@ -122,8 +137,8 @@ body {
 }
 
 .top-header {
-    background: var(--card-bg);
-    border-bottom: 1px solid var(--border-color);
+    background: rgba(30, 41, 59, 0.78);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
     padding: var(--spacing-lg) var(--spacing-xl);
     display: flex;
     justify-content: space-between;
@@ -132,6 +147,8 @@ body {
     top: 0;
     z-index: 100;
     height: var(--header-height);
+    backdrop-filter: blur(18px);
+    box-shadow: 0 8px 32px rgba(15, 23, 42, 0.3);
 }
 
 .header-left {
@@ -202,6 +219,112 @@ body {
 .content-area {
     padding: var(--spacing-2xl) var(--spacing-xl);
     flex: 1;
+}
+
+.dashboard-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.8fr);
+    gap: var(--spacing-xl);
+    margin-bottom: var(--spacing-xl);
+    padding: var(--spacing-xl);
+    border-radius: 24px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.94) 0%, rgba(15, 23, 42, 0.92) 100%);
+    box-shadow: var(--shadow-xl);
+}
+
+.hero-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    background: rgba(220, 20, 60, 0.12);
+    border: 1px solid rgba(220, 20, 60, 0.2);
+    color: #ffb4c0;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.hero-copy h2 {
+    margin: 0.9rem 0 0.75rem;
+    font-size: clamp(2rem, 3.8vw, 3.25rem);
+    line-height: 1.02;
+    letter-spacing: -0.04em;
+}
+
+.hero-copy p {
+    max-width: 68ch;
+    color: var(--text-secondary);
+    font-size: 1.02rem;
+}
+
+.hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 1.25rem;
+}
+
+.hero-panel {
+    display: grid;
+    gap: 0.85rem;
+    align-content: start;
+}
+
+.hero-panel-card {
+    padding: 1rem 1.1rem;
+    border-radius: 18px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(15, 23, 42, 0.58);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.hero-panel-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+}
+
+.hero-panel-value {
+    margin-top: 0.35rem;
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: var(--text-primary);
+}
+
+.status-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-bottom: var(--spacing-xl);
+}
+
+.status-chip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.85rem 1rem;
+    border-radius: 16px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(30, 41, 59, 0.64);
+    backdrop-filter: blur(12px);
+}
+
+.status-chip-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--text-muted);
+}
+
+.status-chip strong {
+    font-size: 0.95rem;
+    color: var(--text-primary);
 }
 
 /* ============================================================================
@@ -571,12 +694,13 @@ a:hover {
 }
 
 .section-card {
-    background: var(--card-bg);
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.92) 100%);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 20px;
     padding: var(--spacing-xl);
     margin-bottom: var(--spacing-xl);
     transition: var(--transition-fast);
+    box-shadow: 0 20px 45px rgba(2, 6, 23, 0.18);
 }
 
 .section-card:hover {
@@ -813,9 +937,9 @@ input::placeholder {
 
 .job-card,
 .report-card {
-    background: linear-gradient(135deg, var(--card-bg) 0%, var(--card-hover) 100%);
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 18px;
     padding: var(--spacing-lg);
     transition: var(--transition-fast);
     display: flex;
@@ -872,6 +996,31 @@ input::placeholder {
 .status-cancelled {
     background: rgba(148, 163, 184, 0.15);
     color: var(--text-muted);
+}
+
+.status-critical {
+    background: rgba(239, 68, 68, 0.18);
+    color: #fca5a5;
+}
+
+.status-high {
+    background: rgba(245, 158, 11, 0.18);
+    color: #fdba74;
+}
+
+.status-medium {
+    background: rgba(59, 130, 246, 0.18);
+    color: #93c5fd;
+}
+
+.status-low {
+    background: rgba(16, 185, 129, 0.18);
+    color: #6ee7b7;
+}
+
+.status-ready {
+    background: rgba(16, 185, 129, 0.18);
+    color: #6ee7b7;
 }
 
 .job-meta {

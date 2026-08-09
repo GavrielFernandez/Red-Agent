@@ -9,6 +9,10 @@ import subprocess
 import logging
 import time
 import shutil
+import os
+import importlib
+import importlib.util
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,11 @@ class BaseTool(ABC):
         self.execution_count = 0
         self.failure_count = 0
         self._check_availability()
+
+    @property
+    def description(self) -> str:
+        """Human-readable tool description for prompts and UI."""
+        return self.__class__.__doc__.strip().split("\n")[0] if self.__class__.__doc__ else self.name
     
     def _check_availability(self):
         """Check if the tool is available in the system"""
@@ -397,13 +406,126 @@ class ToolFactory:
     """Factory for creating and managing tool instances with statistics"""
     
     def __init__(self):
-        self.tools = {
+        self.tools: Dict[str, BaseTool] = {
             "nmap": NmapTool(),
             "sqlmap": SqlmapTool(),
             "curl": CurlTool(),
             "hydra": HydraTool(),
         }
+        self._load_builtin_plugin_tools()
+        self._load_detected_project_plugins()
+        self._load_external_plugin_tools()
         logger.info(f"[ToolFactory] Initialized with tools: {list(self.tools.keys())}")
+
+    def _load_detected_project_plugins(self):
+        """Auto-discover plugin paths from known sibling projects in workspace."""
+        project_root = Path(__file__).resolve().parents[1]
+        workspace_root = project_root.parent
+
+        candidate_projects = [
+            workspace_root / "woodpecker-main",
+            workspace_root / "BSF-master",
+        ]
+
+        candidate_plugin_dirs: List[Path] = []
+        for proj in candidate_projects:
+            candidate_plugin_dirs.extend(
+                [
+                    proj / "red_agent" / "tools" / "plugins",
+                    proj / "tools" / "plugins",
+                    proj / "plugins",
+                ]
+            )
+
+        for plugin_dir in candidate_plugin_dirs:
+            self._load_plugins_from_dir(plugin_dir, source_label="auto-detected")
+
+    def _register_tool(self, name: str, tool: BaseTool):
+        """Register a tool instance with overwrite protection logging."""
+        key = name.lower().strip()
+        if key in self.tools:
+            logger.warning(f"[ToolFactory] Overwriting tool registration for '{key}'")
+        self.tools[key] = tool
+
+    def _load_builtin_plugin_tools(self):
+        """Load plugins from tools/plugins directory shipped with the project."""
+        plugins_dir = Path(__file__).parent / "plugins"
+
+        if not plugins_dir.exists():
+            return
+
+        for py_file in plugins_dir.glob("*.py"):
+            if py_file.name.startswith("_") or py_file.name == "__init__.py":
+                continue
+
+            module_name = f"redagent_builtin_{py_file.stem}"
+            try:
+                spec = importlib.util.spec_from_file_location(module_name, py_file)
+                if spec is None or spec.loader is None:
+                    logger.warning(f"[ToolFactory] Could not create spec for {py_file}")
+                    continue
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                self._register_module_tools(module, source=str(py_file))
+            except Exception as exc:
+                logger.warning(f"[ToolFactory] Failed loading plugin module {py_file}: {exc}")
+
+    def _load_external_plugin_tools(self):
+        """Load plugins from semicolon-separated paths in REDAGENT_TOOL_PLUGIN_PATHS."""
+        raw_paths = os.getenv("REDAGENT_TOOL_PLUGIN_PATHS", "").strip()
+        if not raw_paths:
+            return
+
+        for root in [p.strip() for p in raw_paths.split(";") if p.strip()]:
+            self._load_plugins_from_dir(Path(root), source_label="env-configured")
+
+    def _load_plugins_from_dir(self, root_path: Path, source_label: str = "external"):
+        """Load plugin files from a single directory path."""
+        if not root_path.exists() or not root_path.is_dir():
+            return
+
+        for py_file in root_path.glob("*.py"):
+            if py_file.name.startswith("_") or py_file.name == "__init__.py":
+                continue
+
+            module_name = f"redagent_{source_label}_{py_file.stem}"
+            try:
+                spec = importlib.util.spec_from_file_location(module_name, py_file)
+                if spec is None or spec.loader is None:
+                    logger.warning(f"[ToolFactory] Could not create spec for {py_file}")
+                    continue
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                self._register_module_tools(module, source=str(py_file))
+            except Exception as exc:
+                logger.warning(f"[ToolFactory] Failed loading plugin {py_file}: {exc}")
+
+    def _register_module_tools(self, module: Any, source: str):
+        """Register tools from a plugin module using register_tools() contract."""
+        register_func = getattr(module, "register_tools", None)
+        if register_func is None:
+            return
+
+        try:
+            registered = register_func()
+        except Exception as exc:
+            logger.warning(f"[ToolFactory] register_tools() failed in {source}: {exc}")
+            return
+
+        if isinstance(registered, dict):
+            items = registered.items()
+        elif isinstance(registered, list):
+            items = [(tool.name, tool) for tool in registered if isinstance(tool, BaseTool)]
+        else:
+            logger.warning(f"[ToolFactory] Unsupported register_tools() return type in {source}")
+            return
+
+        for tool_name, tool in items:
+            if not isinstance(tool, BaseTool):
+                logger.warning(f"[ToolFactory] Skipping non-BaseTool registration from {source}: {tool_name}")
+                continue
+            self._register_tool(tool_name, tool)
+            logger.info(f"[ToolFactory] Registered plugin tool '{tool_name}' from {source}")
     
     def get_tool(self, tool_name: str) -> Optional[BaseTool]:
         """Get a tool instance by name with error handling"""
@@ -416,6 +538,10 @@ class ToolFactory:
     def list_tools(self) -> List[str]:
         """List available tools"""
         return list(self.tools.keys())
+
+    def get_tool_descriptions(self) -> Dict[str, str]:
+        """Return tool name -> description map for prompt/tool selection."""
+        return {name: tool.description for name, tool in self.tools.items()}
     
     def get_tool_stats(self) -> Dict[str, Any]:
         """Get statistics for all tools"""

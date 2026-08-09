@@ -102,7 +102,7 @@ class NucleiScanner:
     """
     
     def __init__(self, nuclei_path: str = "nuclei"):
-        self.nuclei_path = nuclei_path
+        self.nuclei_path = os.getenv("REDAGENT_NUCLEI_PATH", nuclei_path)
         self.custom_templates_dir = Path("templates/nuclei")
         self.results_dir = Path("logs/nuclei_scans")
         self.is_available = self._check_nuclei_available()

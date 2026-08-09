@@ -219,6 +219,34 @@
             flex: 1;
         }
 
+        .finding-list-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .finding-metric {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 14px 16px;
+        }
+
+        .finding-metric .metric-label {
+            display: block;
+            color: var(--text-muted);
+            font-size: 0.82rem;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+
+        .finding-metric .metric-value {
+            font-size: 1.05rem;
+            font-weight: 700;
+        }
+
         .severity-badge {
             display: inline-block;
             padding: 6px 12px;
@@ -571,6 +599,12 @@
             <div class="findings-list" id="findingsList"></div>
         </div>
 
+        <!-- Business Logic Insights -->
+        <div class="section" id="businessLogicSection" style="display: none;">
+            <h2 class="section-title">Business Logic Insights</h2>
+            <div id="businessLogicList" class="finding-list-grid"></div>
+        </div>
+
         <!-- Statistics -->
         <div class="section">
             <h2 class="section-title">Testing Statistics</h2>
@@ -646,8 +680,8 @@
         function displayReport(report) {
             currentReport = report;
             const metadata = report.metadata || {};
-            const summary = report.executive_summary || {};
             const findings = report.findings || [];
+            const summary = deriveExecutiveSummary(report);
             const stats = report.statistics || {};
             const recommendations = report.recommendations || [];
             const methodology = report.methodologies || {};
@@ -658,16 +692,16 @@
             document.getElementById('metaModel').textContent = metadata.llm_model || 'Unknown';
             document.getElementById('reportSubtitle').textContent = `Assessment of ${metadata.target || 'Target'}`;
 
-            const date = new Date(metadata.date);
-            document.getElementById('metaDate').textContent = date.toLocaleString();
-            document.getElementById('generatedTime').textContent = `Report generated on ${date.toLocaleString()}`;
+            const dateLabel = formatReportDate(metadata);
+            document.getElementById('metaDate').textContent = dateLabel;
+            document.getElementById('generatedTime').textContent = `Report generated on ${dateLabel}`;
 
             // Summary
             document.getElementById('vulnTotal').textContent = summary.vulnerabilities_found || 0;
             document.getElementById('vulnCritical').textContent = summary.critical_vulnerabilities || 0;
             document.getElementById('vulnHigh').textContent = summary.high_vulnerabilities || 0;
-            document.getElementById('vulnMedium').textContent = findings.filter(f => f.severity === 'medium').length;
-            document.getElementById('vulnLow').textContent = findings.filter(f => f.severity === 'low').length;
+            document.getElementById('vulnMedium').textContent = summary.medium_vulnerabilities || 0;
+            document.getElementById('vulnLow').textContent = summary.low_vulnerabilities || 0;
             document.getElementById('summaryText').textContent = summary.summary_text || '';
 
             // Risk Level
@@ -681,6 +715,21 @@
                 document.getElementById('findingsSection').style.display = 'block';
                 const findingsList = document.getElementById('findingsList');
                 findingsList.innerHTML = findings.map(findingToHtml).join('');
+            }
+
+            const businessLogicFindings = findings.filter(isBusinessLogicFinding);
+            const businessLogicSection = document.getElementById('businessLogicSection');
+            const businessLogicList = document.getElementById('businessLogicList');
+            if (businessLogicSection && businessLogicList) {
+                businessLogicSection.style.display = 'block';
+                businessLogicList.innerHTML = businessLogicFindings.length > 0
+                    ? businessLogicFindings.map(businessLogicToHtml).join('')
+                    : `
+                        <div class="finding-metric">
+                            <span class="metric-label">No business logic insights</span>
+                            <div class="metric-value">This report does not contain findings tagged as Business Logic.</div>
+                        </div>
+                    `;
             }
 
             // Statistics
@@ -741,9 +790,136 @@
             }
         }
 
+        function formatReportDate(metadata) {
+            const raw = metadata?.date || metadata?.timestamp || metadata?.generated_at || metadata?.created_at || '';
+            if (!raw) return 'Unknown';
+
+            const parsed = new Date(raw);
+            if (!Number.isNaN(parsed.getTime())) {
+                return parsed.toLocaleString();
+            }
+
+            return String(raw);
+        }
+
+        function deriveExecutiveSummary(report) {
+            const findings = Array.isArray(report?.findings) ? report.findings : [];
+            const executiveSummary = report?.executive_summary || {};
+
+            const counts = findings.reduce((accumulator, finding) => {
+                const severity = String(finding?.severity || 'medium').toLowerCase();
+                accumulator.total += 1;
+                accumulator[severity] = (accumulator[severity] || 0) + 1;
+                return accumulator;
+            }, {
+                total: findings.length,
+                critical: 0,
+                high: 0,
+                medium: 0,
+                low: 0,
+                info: 0,
+            });
+
+            const critical = Number(executiveSummary.critical_vulnerabilities ?? counts.critical ?? 0);
+            const high = Number(executiveSummary.high_vulnerabilities ?? counts.high ?? 0);
+            const medium = Number(executiveSummary.medium_vulnerabilities ?? counts.medium ?? 0);
+            const low = Number(executiveSummary.low_vulnerabilities ?? counts.low ?? 0);
+            const total = Number(executiveSummary.vulnerabilities_found ?? counts.total ?? 0);
+            const riskLevel = executiveSummary.risk_level || (critical > 0 ? 'CRITICAL' : high > 0 ? 'HIGH' : medium > 0 ? 'MEDIUM' : 'LOW');
+
+            return {
+                risk_level: riskLevel,
+                vulnerabilities_found: total,
+                critical_vulnerabilities: critical,
+                high_vulnerabilities: high,
+                medium_vulnerabilities: medium,
+                low_vulnerabilities: low,
+                summary_text: executiveSummary.summary_text || `Assessment identified ${total} findings (${critical} critical, ${high} high, ${medium} medium, ${low} low). Risk level: ${riskLevel}.`,
+            };
+        }
+
+        function deriveFindingConfidence(finding) {
+            const explicit = Number(finding?.confidence_score ?? finding?.confidence ?? finding?.confidence_percent);
+            if (Number.isFinite(explicit) && explicit > 0) {
+                return Math.max(0, Math.min(100, explicit));
+            }
+
+            const validation = finding?.validation || {};
+            if (validation?.confirmed === true) return 95;
+            if (String(validation?.status || '').toLowerCase() === 'bypass_confirmed') return 92;
+            const validationConfidence = Number(validation?.confidence);
+            if (Number.isFinite(validationConfidence) && validationConfidence > 0) {
+                const normalized = validationConfidence <= 1 ? validationConfidence * 100 : validationConfidence;
+                return Math.max(0, Math.min(100, normalized));
+            }
+
+            const status = String(finding?.exploitation_status || finding?.status || '').toLowerCase();
+            const severity = String(finding?.severity || 'medium').toLowerCase();
+
+            if (status === 'confirmed') return 95;
+            if (status === 'potential') return 65;
+            if (status === 'bypass_confirmed' || status === 'reflected') return 90;
+            if (severity === 'critical') return 85;
+            if (severity === 'high') return 75;
+            if (severity === 'medium') return 55;
+            if (severity === 'low') return 35;
+            return 25;
+        }
+
+        function isBusinessLogicFinding(finding) {
+            if (!finding || typeof finding !== 'object') return false;
+
+            const family = String(finding.attack_family || finding.family || '').toLowerCase();
+            const type = String(finding.type || '').toLowerCase();
+            const description = String(finding.description || '').toLowerCase();
+            const evidence = String(finding.evidence || '').toLowerCase();
+
+            return family === 'business logic'
+                || type.startsWith('business_logic_')
+                || description.includes('business logic')
+                || description.includes('workflow bypass')
+                || description.includes('access control')
+                || /workflow|approval|privilege|authorization|role|idor|coupon|checkout|tenant/.test(description)
+                || /workflow|approval|privilege|authorization|role|idor|coupon|checkout|tenant/.test(evidence);
+        }
+
+        function businessLogicToHtml(finding) {
+            const confidence = deriveFindingConfidence(finding);
+            const severity = String(finding.severity || 'medium');
+
+            return `
+                <div class="finding ${severity}">
+                    <div class="finding-header">
+                        <div class="finding-title">${escapeHtml(finding.attack_variant || finding.type || 'Business Logic')}</div>
+                        <span class="severity-badge severity-${severity}">${severity.toUpperCase()}</span>
+                    </div>
+                    <div class="finding-badges">
+                        <span class="finding-badge">Family: ${escapeHtml(finding.attack_family || finding.family || 'Business Logic')}</span>
+                        <span class="finding-badge">Variant: ${escapeHtml(finding.attack_variant || 'Uncategorized')}</span>
+                        <span class="finding-badge">Confidence: ${confidence}%</span>
+                        <span class="finding-badge">Evidence: ${escapeHtml(finding.evidence_strength || 'moderate')}</span>
+                    </div>
+                    <div class="finding-details">
+                        <div class="finding-detail-item">
+                            <div class="detail-label">Location</div>
+                            <div class="detail-value">${escapeHtml(finding.location || 'N/A')}</div>
+                        </div>
+                        <div class="finding-detail-item">
+                            <div class="detail-label">Status</div>
+                            <div class="detail-value">${escapeHtml(finding.exploitation_status || finding.status || 'Unknown')}</div>
+                        </div>
+                        <div class="finding-detail-item">
+                            <div class="detail-label">Evidence</div>
+                            <div class="detail-value">${escapeHtml(finding.evidence || 'No evidence provided')}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         function findingToHtml(finding) {
             const severity = finding.severity || 'low';
-            const confidence = Number(finding.confidence_score || 0);
+            const confidence = deriveFindingConfidence(finding);
             const evidenceStrength = String(finding.evidence_strength || 'moderate');
             const attackFamily = String(finding.attack_family || 'General');
             const attackVariant = String(finding.attack_variant || 'Uncategorized');

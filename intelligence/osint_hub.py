@@ -16,6 +16,7 @@ import asyncio
 import logging
 import json
 import re
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, quote
@@ -547,6 +548,24 @@ _osint_hub: Optional[OSINTHub] = None
 def get_osint_hub(api_keys: Optional[Dict] = None) -> OSINTHub:
     """Get or create OSINT hub singleton"""
     global _osint_hub
+
+    resolved_keys = api_keys or {
+        "shodan": os.getenv("SHODAN_API_KEY", "").strip(),
+        "virustotal": os.getenv("VIRUSTOTAL_API_KEY", "").strip(),
+        "censys_id": os.getenv("CENSYS_API_ID", "").strip(),
+        "censys_secret": os.getenv("CENSYS_API_SECRET", "").strip(),
+        "securitytrails": os.getenv("SECURITYTRAILS_API_KEY", "").strip(),
+        "hunter": os.getenv("HUNTER_API_KEY", "").strip(),
+    }
+
     if _osint_hub is None:
-        _osint_hub = OSINTHub(api_keys)
+        _osint_hub = OSINTHub(resolved_keys)
+    else:
+        existing_configured = any(source.is_configured() for source in _osint_hub.sources.values())
+        incoming_configured = any(bool(v) for v in resolved_keys.values())
+
+        # Rebuild singleton when explicit keys are provided, or when stale empty state is detected.
+        if api_keys is not None or (incoming_configured and not existing_configured):
+            _osint_hub = OSINTHub(resolved_keys)
+
     return _osint_hub
