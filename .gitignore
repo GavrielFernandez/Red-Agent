@@ -52,3 +52,6 @@ htmlcov/
 
 # Ollama
 ollama_models/
+
+# Local binaries too large for GitHub
+tools/bin/
